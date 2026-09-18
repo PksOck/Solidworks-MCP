@@ -2,7 +2,7 @@
 Tool registry for SolidWorks MCP server extensions.
 
 Lets new tools be added by writing a single decorated function in
-solidworks_mcp/tools/, without editing server.py. The 22 original tools stay
+solidworks_mcp/tools/, without editing server.py. The 25 original tools stay
 in server.py and are not affected.
 """
 
@@ -49,12 +49,12 @@ def _load() -> None:
     global _loaded
     if _loaded:
         return
-    _loaded = True
     try:
         from . import tools  # noqa: F401
     except Exception as e:
         logger.error(f"Failed to import tools package: {e}")
         raise
+    _loaded = True
 
 
 def registered_tools() -> List[Tool]:
@@ -79,4 +79,7 @@ def dispatch(name: str, sw, arguments: Dict) -> Optional[Dict]:
     entry = _TOOLS.get(name)
     if entry is None:
         return None
-    return entry["handler"](sw, **arguments)
+    result = entry["handler"](sw, **arguments)
+    if result is None:
+        raise ValueError(f"Tool returned no result: {name}")
+    return result

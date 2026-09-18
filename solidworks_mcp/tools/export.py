@@ -58,19 +58,19 @@ def list_planar_faces(sw, min_area_mm2: float = 0.0) -> dict:
         body_name = com(body, "Name")
         for face in com(body, "GetFaces") or []:
             surface = com(face, "GetSurface")
-            is_plane = com(surface, "IsPlane")
-            area_mm2 = com(face, "GetArea") * 1_000_000
-            if is_plane and area_mm2 >= min_area_mm2:
-                nx, ny, nz, px, py, pz = com(surface, "PlaneParams")[:6]
-                faces.append({
-                    "index": index,
-                    "body": body_name,
-                    "body_index": body_index,
-                    "area_mm2": round(area_mm2, 2),
-                    "normal": [round(nx, 6), round(ny, 6), round(nz, 6)],
-                    "point_mm": [round(px * 1000, 3), round(py * 1000, 3),
-                                 round(pz * 1000, 3)]
-                })
+            if com(surface, "IsPlane"):
+                area_mm2 = com(face, "GetArea") * 1_000_000
+                if area_mm2 >= min_area_mm2:
+                    nx, ny, nz, px, py, pz = com(surface, "PlaneParams")[:6]
+                    faces.append({
+                        "index": index,
+                        "body": body_name,
+                        "body_index": body_index,
+                        "area_mm2": round(area_mm2, 2),
+                        "normal": [round(nx, 6), round(ny, 6), round(nz, 6)],
+                        "point_mm": [round(px * 1000, 3), round(py * 1000, 3),
+                                     round(pz * 1000, 3)]
+                    })
             index += 1
 
     faces.sort(key=lambda f: f["area_mm2"], reverse=True)
