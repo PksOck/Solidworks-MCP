@@ -33,6 +33,7 @@ from mcp.types import Tool, TextContent
 from .automation import SolidWorksAutomation
 from .constants import SwErrors
 from .config import get_config, save_config
+from .registry import registered_tools, dispatch
 from .utils import get_solidworks_info, set_default_unit
 
 # Configure logging
@@ -334,7 +335,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["code"]
             }
         ),
-    ]
+    ] + registered_tools()
 
 
 # ============================================================================
@@ -518,7 +519,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result = _execute_python_fixed(code)
         
         else:
-            result = sw_automation._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError)
+            result = dispatch(name, sw_automation, arguments)
+            if result is None:
+                result = sw_automation._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError)
         
         logger.info(f"Result: success={result['success']}")
         return [TextContent(type="text", text=format_result(result))]
