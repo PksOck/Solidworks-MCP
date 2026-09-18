@@ -12,6 +12,7 @@ from typing import Optional, Dict
 import win32com.client
 import pythoncom
 
+from ..comutil import com
 from ..constants import SwErrors, SwDocumentTypes, SwFileTypes
 from ..utils import find_template
 
@@ -339,7 +340,7 @@ class DocumentOperations:
                 3: "Drawing"
             }
             
-            doc_type = doc.GetType()
+            doc_type = com(doc, "GetType")
             title = self._get_doc_title(doc)
             path = self._get_doc_path(doc)
             
@@ -371,25 +372,23 @@ class DocumentOperations:
                     return r
             
             docs = []
-            doc = self._sw_app.GetFirstDocument()
-            
+            doc = com(self._sw_app, "GetFirstDocument")
+
             while doc:
                 try:
-                    title = doc.GetTitle
-                    if callable(title):
-                        title = title()
-                    doc_type = doc.GetType()
-                    
+                    title = com(doc, "GetTitle")
+                    doc_type = com(doc, "GetType")
+
                     type_names = {1: "Part", 2: "Assembly", 3: "Drawing"}
-                    
+
                     docs.append({
                         "title": title,
                         "type": type_names.get(doc_type, "Unknown")
                     })
                 except:
                     pass
-                
-                doc = doc.GetNext()
+
+                doc = com(doc, "GetNext")
             
             return self._result(True, f"{len(docs)} document(s) open",
                               SwErrors.swSuccess, {"documents": docs})
