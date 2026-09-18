@@ -6,5 +6,6 @@ Add a module here when its part is implemented.
 """
 
 from . import export  # noqa: F401
+from . import weldments  # noqa: F401
 
-__all__ = ["export"]
+__all__ = ["export", "weldments"]
