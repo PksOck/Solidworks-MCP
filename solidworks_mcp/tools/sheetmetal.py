@@ -24,6 +24,15 @@ def _find_sheet_metal_feature(doc):
     return None
 
 
+def _find_flat_pattern_feature(doc):
+    feat = com(doc, "FirstFeature")
+    while feat is not None:
+        if com(feat, "GetTypeName2") == "FlatPattern":
+            return feat
+        feat = com(feat, "GetNextFeature")
+    return None
+
+
 @tool(
     name="get_sheet_metal_info",
     description=(
@@ -64,6 +73,117 @@ def get_sheet_metal_info(sw) -> dict:
             "relief_ratio": com(smdata, "ReliefRatio"),
             "use_material_sheet_metal_parameters": com(smdata, "UseMaterialSheetMetalParameters"),
             "bend_table_file": com(smdata, "BendTableFile"),
+        }
+    )
+
+
+@tool(
+    name="flatten_sheet_metal",
+    description=(
+        "Suppress or unsuppress the active part's Flat-Pattern feature, "
+        "toggling the body between flattened and folded state. Modifies "
+        "the active part (not saved)."
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "flatten": {
+                "type": "boolean",
+                "description": "True to flatten (suppress Flat-Pattern feature state 1), "
+                                "false to fold back (state 0)."
+            }
+        },
+        "required": ["flatten"]
+    },
+)
+def flatten_sheet_metal(sw, flatten: bool) -> dict:
+    """Toggle the Flat-Pattern feature between flattened and folded state."""
+    doc, err = sw.get_active_doc()
+    if err:
+        return err
+
+    feat = _find_flat_pattern_feature(doc)
+    if feat is None:
+        return sw._result(False, "Part has no Flat-Pattern feature.",
+                          SwErrors.swFeatureError)
+
+    state = 1 if flatten else 0
+    try:
+        ok = com(feat, "SetSuppression", state)
+        com(doc, "EditRebuild3")
+    except Exception as e:
+        logger.error(f"SetSuppression failed: {e}")
+        return sw._result(False, f"Could not set flat pattern state: {e}",
+                          SwErrors.swFeatureError)
+
+    if not ok:
+        return sw._result(False, "SetSuppression returned false.",
+                          SwErrors.swFeatureError)
+
+    return sw._result(
+        True,
+        f"Flat pattern {'flattened' if flatten else 'folded back'}.",
+        data={"flattened": flatten}
+    )
+
+
+@tool(
+    name="get_flat_pattern_info",
+    description=(
+        "Flatten the active sheet metal part, read the flat pattern's "
+        "bounding box and body/face counts, then fold it back. Net effect "
+        "on the model is none (not saved), but the part is flattened and "
+        "refolded during the call."
+    ),
+    schema={
+        "type": "object",
+        "properties": {},
+        "required": []
+    },
+)
+def get_flat_pattern_info(sw) -> dict:
+    """Read flat pattern bounding-box dimensions, restoring the folded state after."""
+    doc, err = sw.get_active_doc()
+    if err:
+        return err
+
+    feat = _find_flat_pattern_feature(doc)
+    if feat is None:
+        return sw._result(False, "Part has no Flat-Pattern feature.",
+                          SwErrors.swFeatureError)
+
+    # IsSuppressed()==True is the normal/folded state (SetSuppression(0));
+    # SetSuppression(1) unsuppresses the feature, which is what flattens the
+    # body (live-verified: 42 -> 14 faces on a real part). Counter-intuitive
+    # naming, but matches swSuppressFeature=0 / swUnSuppressFeature=1.
+    was_folded = com(feat, "IsSuppressed")
+
+    try:
+        if was_folded:
+            com(feat, "SetSuppression", 1)
+            com(doc, "EditRebuild3")
+
+        bodies = com(doc, "GetBodies2", 0, True)
+        if not bodies:
+            return sw._result(False, "No solid body found after flattening.",
+                              SwErrors.swFeatureError)
+        body = bodies[0]
+        box = com(body, "GetBodyBox")
+        faces = com(body, "GetFaceCount")
+    finally:
+        if was_folded:
+            com(feat, "SetSuppression", 0)
+            com(doc, "EditRebuild3")
+
+    xmin, ymin, zmin, xmax, ymax, zmax = box
+    return sw._result(
+        True,
+        "Read flat pattern info (model restored to folded state).",
+        data={
+            "length_mm": (xmax - xmin) * 1000,
+            "width_mm": (ymax - ymin) * 1000,
+            "height_mm": (zmax - zmin) * 1000,
+            "face_count": faces
         }
     )
 
