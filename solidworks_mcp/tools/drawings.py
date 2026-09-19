@@ -3,12 +3,18 @@ Drawing tools (part F2): standard views and cut-list table on the active drawing
 """
 
 import logging
+import os
 
 from ..comutil import com
 from ..constants import SwErrors
 from ..registry import tool
 
 logger = logging.getLogger("SolidWorksMCP")
+
+_DEFAULT_ANGLE_TEMPLATE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "templates",
+    "weldment_cutlist_angles.sldwldtbt"
+)
 
 
 @tool(
@@ -127,8 +133,12 @@ def insert_cut_list_table(sw, view_name: str, x: float = 0.05, y: float = 0.05,
         return sw._result(False, f"View not found: {view_name}",
                           SwErrors.swUnknownError)
 
+    effective_template = template_path or (
+        _DEFAULT_ANGLE_TEMPLATE if os.path.isfile(_DEFAULT_ANGLE_TEMPLATE) else ""
+    )
+
     try:
-        table = view.InsertWeldmentTable(True, x, y, 1, template_path, "")
+        table = view.InsertWeldmentTable(True, x, y, 1, "", effective_template)
     except Exception as e:
         logger.error(f"InsertWeldmentTable failed: {e}")
         return sw._result(False, f"Could not insert cut-list table: {e}",
