@@ -31,6 +31,7 @@ from mcp.types import Tool, TextContent
 
 # Local imports
 from .automation import SolidWorksAutomation
+from .comutil import com
 from .constants import SwErrors
 from .config import get_config, save_config
 from .registry import registered_tools, dispatch
@@ -660,60 +661,40 @@ def _list_features_fixed() -> Dict:
             return err
         
         features = []
-        
-        # FIXED: FirstFeature is a property in SW 2025 COM, not a method
-        try:
-            feat = doc.FirstFeature
-        except AttributeError:
-            feat = doc.FirstFeature()
-        
+
+        # FIXED (B17): CDispatch.__call__ always reports callable()==True even for
+        # properties, so `if callable(x): x()` invokes properties as if they were
+        # methods and raises "Member not found", which the bare except then
+        # misread as "end of feature tree" -- stopping after the first feature.
+        # com() resolves this correctly via inspect.ismethod().
+        feat = com(doc, "FirstFeature")
+
         while feat is not None:
             try:
-                name = ""
-                feat_type = ""
-                suppressed = False
-                
-                try:
-                    name = feat.Name
-                except:
-                    name = "<unknown>"
-                
-                # FIXED: GetTypeName2 is a property in SW 2025 COM
-                try:
-                    feat_type = feat.GetTypeName2
-                    if callable(feat_type):
-                        feat_type = feat_type()
-                except:
-                    try:
-                        feat_type = feat.GetTypeName()
-                    except:
-                        feat_type = "<unknown>"
-                
-                try:
-                    suppressed = feat.IsSuppressed()
-                except:
-                    suppressed = False
-                
-                features.append({
-                    "name": name,
-                    "type": feat_type,
-                    "suppressed": bool(suppressed)
-                })
-                
-            except Exception as e:
-                features.append({
-                    "name": "<error>",
-                    "type": str(e),
-                    "suppressed": False
-                })
-            
-            # FIXED: GetNextFeature is a property in SW 2025 COM
-            try:
-                feat = feat.GetNextFeature
-                if callable(feat):
-                    feat = feat()
+                name = com(feat, "Name")
             except:
-                break
+                name = "<unknown>"
+
+            try:
+                feat_type = com(feat, "GetTypeName2")
+            except:
+                try:
+                    feat_type = com(feat, "GetTypeName")
+                except:
+                    feat_type = "<unknown>"
+
+            try:
+                suppressed = com(feat, "IsSuppressed")
+            except:
+                suppressed = False
+
+            features.append({
+                "name": name,
+                "type": feat_type,
+                "suppressed": bool(suppressed)
+            })
+
+            feat = com(feat, "GetNextFeature")
         
         return {
             "success": True,

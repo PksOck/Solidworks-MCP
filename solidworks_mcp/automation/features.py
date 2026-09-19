@@ -22,6 +22,7 @@ from typing import Optional, Dict
 import win32com.client
 import pythoncom
 
+from ..comutil import com
 from ..constants import SwErrors, SwEndConditions
 
 logger = logging.getLogger(__name__)
@@ -540,28 +541,23 @@ class FeatureOperations:
                 return err
             
             features = []
-            
-            # FIXED: Use property access, not method calls
-            feat = doc.FirstFeature
-            
+
+            # FIXED: com() resolves whether FirstFeature/GetNextFeature/GetTypeName2
+            # are properties or methods -- a bare access can return a bound method
+            # object (always truthy), which previously made the loop stop after the
+            # first feature (B17: `feat.GetNextFeature` never actually advanced).
+            feat = com(doc, "FirstFeature")
+
             while feat is not None:
-                try:
-                    name = feat.Name
-                    # FIXED: GetTypeName2 is a property in SW 2025
-                    feat_type = feat.GetTypeName2
-                    
-                    features.append({
-                        "name": name,
-                        "type": feat_type,
-                    })
-                except:
-                    pass
-                
-                # FIXED: GetNextFeature is a property in SW 2025
-                try:
-                    feat = feat.GetNextFeature
-                except:
-                    break
+                name = com(feat, "Name")
+                feat_type = com(feat, "GetTypeName2")
+
+                features.append({
+                    "name": name,
+                    "type": feat_type,
+                })
+
+                feat = com(feat, "GetNextFeature")
             
             return self._result(True, f"{len(features)} features found",
                               SwErrors.swSuccess,
