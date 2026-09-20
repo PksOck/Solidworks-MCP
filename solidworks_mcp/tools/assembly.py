@@ -184,23 +184,49 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
     schema={"type": "object", "properties": {}, "required": []},
 )
 def list_components(sw) -> dict:
-    """List components of the active assembly"""
+    """List all component instances of the active assembly recursively."""
     asm, err = _require_assembly(sw)
     if err:
         return err
 
     comps = []
-    for comp in com(asm, "GetComponents", True) or []:
+    unresolved = []
+
+    def visit(comp, parent_path=None):
+        name = com(comp, "Name2")
+        instance_path = f"{parent_path}/{name}" if parent_path else name
         # swComponentSuppressionState_e: swComponentSuppressed = 0 (TLB-verified)
         comps.append({
-            "name": com(comp, "Name2"),
+            "name": name,
+            "instance_path": instance_path,
+            "parent_path": parent_path,
             "path": com(comp, "GetPathName"),
             "is_fixed": bool(com(comp, "IsFixed")),
             "suppressed": com(comp, "GetSuppression") == 0,
         })
+        try:
+            children = com(comp, "GetChildren") or []
+        except Exception as error:
+            unresolved.append(f"{instance_path}: children unavailable ({error})")
+            return
+        for child in children:
+            visit(child, instance_path)
 
-    return sw._result(True, f"Found {len(comps)} top-level components.",
-                      data={"components": comps})
+    for component in com(asm, "GetComponents", True) or []:
+        visit(component)
+
+    return sw._result(
+        True, f"Found {len(comps)} component instances.",
+        data={
+            "components": comps,
+            "coverage": {
+                "complete": not unresolved,
+                "visited_count": len(comps),
+                "unresolved": unresolved,
+                "truncated": False,
+                "next_cursor": None,
+            },
+        })
 
 
 @tool(
