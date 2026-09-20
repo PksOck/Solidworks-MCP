@@ -335,6 +335,41 @@ class SketchOperations:
         except Exception as e:
             logger.error(f"Draw arc error: {e}\n{traceback.format_exc()}")
             return self._result(False, f"Error: {e}", SwErrors.swSketchError)
+
+    def draw_spline(self, points: List[List[float]], unit: str = None) -> Dict:
+        """Draw a spline through at least two 2D points in the active sketch."""
+        try:
+            doc, err = self.get_active_doc()
+            if err:
+                return err
+            if len(points) < 2 or any(len(point) != 2 for point in points):
+                return self._result(False, "Spline requires at least two [x, y] points.",
+                                    SwErrors.swInvalidInput)
+            flat_points = []
+            for x, y in points:
+                flat_points.extend([
+                    self._units.to_meters(x, unit),
+                    self._units.to_meters(y, unit),
+                    0.0,
+                ])
+            point_array = win32com.client.VARIANT(
+                pythoncom.VT_ARRAY | pythoncom.VT_R8, flat_points)
+            sketch_manager = doc.SketchManager
+            create_spline = getattr(sketch_manager, "CreateSpline", None)
+            if create_spline is None:
+                sketch_manager._FlagAsMethod("CreateSpline")
+                create_spline = getattr(sketch_manager, "CreateSpline")
+            spline = create_spline(point_array)
+            if spline is None:
+                return self._result(False, "SolidWorks did not create the spline.",
+                                    SwErrors.swSketchError)
+            return self._result(True, f"Spline created through {len(points)} points.",
+                                SwErrors.swSuccess,
+                                {"point_count": len(points),
+                                 "unit": unit or self._units.default_unit.value})
+        except Exception as e:
+            logger.error(f"Draw spline error: {e}\n{traceback.format_exc()}")
+            return self._result(False, f"Error: {e}", SwErrors.swSketchError)
     
     def draw_polygon(self, cx: float = 0, cy: float = 0, radius: float = 25,
                      sides: int = 6, unit: str = None) -> Dict:

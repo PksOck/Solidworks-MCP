@@ -258,6 +258,22 @@ async def list_tools() -> list[Tool]:
                 "required": []
             }
         ),
+        Tool(
+            name="draw_spline",
+            description="Draw a spline through ordered 2D points in the active sketch.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "points": {
+                        "type": "array", "minItems": 2,
+                        "items": {"type": "array", "minItems": 2, "maxItems": 2,
+                                  "items": {"type": "number"}}
+                    },
+                    "unit": {"type": "string", "description": "Unit for point coordinates"}
+                },
+                "required": ["points"]
+            }
+        ),
         
         # Feature Tools
         Tool(
@@ -505,6 +521,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 arguments.get("sides", 6),
                 arguments.get("unit")
             )
+
+        elif name == "draw_spline":
+            result = sw_automation.draw_spline(
+                arguments.get("points", []), arguments.get("unit"))
         
         # Feature Tools
         elif name == "extrude_sketch":
