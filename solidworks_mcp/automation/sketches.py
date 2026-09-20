@@ -370,6 +370,72 @@ class SketchOperations:
         except Exception as e:
             logger.error(f"Draw spline error: {e}\n{traceback.format_exc()}")
             return self._result(False, f"Error: {e}", SwErrors.swSketchError)
+
+    def draw_arc_3point(self, start_x: float, start_y: float,
+                        end_x: float, end_y: float,
+                        point_x: float, point_y: float,
+                        unit: str = None) -> Dict:
+        """Draw an arc from start to end through a third point."""
+        try:
+            doc, err = self.get_active_doc()
+            if err:
+                return err
+            values = [self._units.to_meters(value, unit) for value in
+                      (start_x, start_y, end_x, end_y, point_x, point_y)]
+            arc = doc.SketchManager.Create3PointArc(
+                values[0], values[1], 0.0,
+                values[2], values[3], 0.0,
+                values[4], values[5], 0.0)
+            if arc is None:
+                return self._result(False, "SolidWorks did not create the 3-point arc.",
+                                    SwErrors.swSketchError)
+            return self._result(True, "3-point arc created.", SwErrors.swSuccess, {
+                "start": [start_x, start_y], "end": [end_x, end_y],
+                "point_on_arc": [point_x, point_y],
+                "unit": unit or self._units.default_unit.value,
+            })
+        except Exception as e:
+            logger.error(f"Draw 3-point arc error: {e}\n{traceback.format_exc()}")
+            return self._result(False, f"Error: {e}", SwErrors.swSketchError)
+
+    def draw_slot(self, x1: float, y1: float, x2: float, y2: float,
+                  width: float, unit: str = None) -> Dict:
+        """Draw a straight center-to-center slot in the active sketch."""
+        try:
+            doc, err = self.get_active_doc()
+            if err:
+                return err
+            if width <= 0:
+                return self._result(False, "Slot width must be greater than zero.",
+                                    SwErrors.swInvalidInput)
+            if x1 == x2 and y1 == y2:
+                return self._result(False, "Slot center points must be different.",
+                                    SwErrors.swInvalidInput)
+
+            values = [self._units.to_meters(value, unit) for value in
+                      (x1, y1, x2, y2, width)]
+            slot = doc.SketchManager.CreateSketchSlot(
+                0,      # swSketchSlotCreationType_line
+                0,      # swSketchSlotLengthType_CenterCenter
+                values[4],
+                values[0], values[1], 0.0,
+                values[2], values[3], 0.0,
+                0.0, 0.0, 0.0,
+                1, False)
+            if slot is None:
+                return self._result(False, "SolidWorks did not create the slot.",
+                                    SwErrors.swSketchError)
+
+            unit_str = unit or self._units.default_unit.value
+            center_distance = math.hypot(x2 - x1, y2 - y1)
+            return self._result(True, "Straight slot created.", SwErrors.swSuccess, {
+                "start": [x1, y1], "end": [x2, y2], "width": width,
+                "center_distance": center_distance, "unit": unit_str,
+                "length_type": "center_to_center",
+            })
+        except Exception as e:
+            logger.error(f"Draw slot error: {e}\n{traceback.format_exc()}")
+            return self._result(False, f"Error: {e}", SwErrors.swSketchError)
     
     def draw_polygon(self, cx: float = 0, cy: float = 0, radius: float = 25,
                      sides: int = 6, unit: str = None) -> Dict:

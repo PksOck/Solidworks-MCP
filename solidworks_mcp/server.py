@@ -274,6 +274,37 @@ async def list_tools() -> list[Tool]:
                 "required": ["points"]
             }
         ),
+        Tool(
+            name="draw_arc_3point",
+            description="Draw an arc from a start point to an end point through a third point.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "start_x": {"type": "number"}, "start_y": {"type": "number"},
+                    "end_x": {"type": "number"}, "end_y": {"type": "number"},
+                    "point_x": {"type": "number"}, "point_y": {"type": "number"},
+                    "unit": {"type": "string", "description": "Coordinate unit"}
+                },
+                "required": ["start_x", "start_y", "end_x", "end_y", "point_x", "point_y"]
+            }
+        ),
+        Tool(
+            name="draw_slot",
+            description="Draw a straight center-to-center slot in the active sketch.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "x1": {"type": "number", "description": "First arc center X"},
+                    "y1": {"type": "number", "description": "First arc center Y"},
+                    "x2": {"type": "number", "description": "Second arc center X"},
+                    "y2": {"type": "number", "description": "Second arc center Y"},
+                    "width": {"type": "number", "exclusiveMinimum": 0,
+                              "description": "Slot width"},
+                    "unit": {"type": "string", "description": "Coordinate and width unit"}
+                },
+                "required": ["x1", "y1", "x2", "y2", "width"]
+            }
+        ),
         
         # Feature Tools
         Tool(
@@ -525,6 +556,19 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "draw_spline":
             result = sw_automation.draw_spline(
                 arguments.get("points", []), arguments.get("unit"))
+
+        elif name == "draw_arc_3point":
+            result = sw_automation.draw_arc_3point(
+                arguments.get("start_x"), arguments.get("start_y"),
+                arguments.get("end_x"), arguments.get("end_y"),
+                arguments.get("point_x"), arguments.get("point_y"),
+                arguments.get("unit"))
+
+        elif name == "draw_slot":
+            result = sw_automation.draw_slot(
+                arguments.get("x1"), arguments.get("y1"),
+                arguments.get("x2"), arguments.get("y2"),
+                arguments.get("width"), arguments.get("unit"))
         
         # Feature Tools
         elif name == "extrude_sketch":
