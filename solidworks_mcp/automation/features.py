@@ -555,6 +555,7 @@ class FeatureOperations:
                 features.append({
                     "name": name,
                     "type": feat_type,
+                    "suppressed": bool(com(feat, "IsSuppressed")),
                 })
 
                 feat = com(feat, "GetNextFeature")
