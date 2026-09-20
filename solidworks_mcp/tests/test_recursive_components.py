@@ -10,6 +10,8 @@ class Component:
         self.IsFixed = False
         self.GetSuppression = 1
         self.GetChildren = list(children)
+        self.ReferencedConfiguration = "Default"
+        self.Transform2 = type("Transform", (), {"ArrayData": list(range(16))})()
 
 
 class Assembly:
@@ -42,6 +44,8 @@ class RecursiveComponentTests(unittest.TestCase):
                          [component["instance_path"] for component in components])
         self.assertEqual(3, result["data"]["coverage"]["visited_count"])
         self.assertTrue(result["data"]["coverage"]["complete"])
+        self.assertEqual("Default", components[1]["configuration"])
+        self.assertEqual(list(range(16)), components[1]["transform"])
 
 
 if __name__ == "__main__":

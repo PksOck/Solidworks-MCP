@@ -192,6 +192,24 @@ def list_components(sw) -> dict:
     comps = []
     unresolved = []
 
+    def optional_component_value(comp, member, instance_path):
+        try:
+            return com(comp, member)
+        except Exception as error:
+            unresolved.append(f"{instance_path}: {member} unavailable ({error})")
+            return None
+
+    def transform_data(comp, instance_path):
+        transform = optional_component_value(comp, "Transform2", instance_path)
+        if transform is None:
+            return None
+        try:
+            values = com(transform, "ArrayData")
+            return list(values) if values is not None else None
+        except Exception as error:
+            unresolved.append(f"{instance_path}: Transform2.ArrayData unavailable ({error})")
+            return None
+
     def visit(comp, parent_path=None):
         name = com(comp, "Name2")
         instance_path = f"{parent_path}/{name}" if parent_path else name
@@ -201,6 +219,9 @@ def list_components(sw) -> dict:
             "instance_path": instance_path,
             "parent_path": parent_path,
             "path": com(comp, "GetPathName"),
+            "configuration": optional_component_value(
+                comp, "ReferencedConfiguration", instance_path),
+            "transform": transform_data(comp, instance_path),
             "is_fixed": bool(com(comp, "IsFixed")),
             "suppressed": com(comp, "GetSuppression") == 0,
         })
