@@ -119,6 +119,7 @@ class FeatureOperations:
         try:
             # Step 1: Close active sketch if one is open
             try:
+                doc.SketchManager.AddToDB = False
                 active_sketch = doc.SketchManager.ActiveSketch
                 if active_sketch is not None:
                     doc.SketchManager.InsertSketch(True)

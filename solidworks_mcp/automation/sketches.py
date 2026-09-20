@@ -27,12 +27,13 @@ class SketchOperations:
     - _units: UnitConverter instance
     """
     
-    def create_sketch(self, plane: str = "Front") -> Dict:
+    def create_sketch(self, plane: str = "Front", exact_geometry: bool = False) -> Dict:
         """
         Create a new sketch on specified plane
         
         Args:
             plane: Plane name - "Front", "Top", or "Right"
+            exact_geometry: Disable automatic relations and snapping while drawing
         
         Returns:
             Result dictionary
@@ -59,16 +60,18 @@ class SketchOperations:
             
             # Insert sketch
             doc.InsertSketch2(True)
+            doc.SketchManager.AddToDB = exact_geometry
             
             return self._result(True, f"Sketch created on {plane_name}",
-                              SwErrors.swSuccess, {"plane": plane_name})
+                              SwErrors.swSuccess, {"plane": plane_name,
+                                                   "exact_geometry": exact_geometry})
             
         except Exception as e:
             logger.error(f"Create sketch error: {e}\n{traceback.format_exc()}")
             return self._result(False, f"Error: {e}", SwErrors.swSketchError)
     
     def create_sketch_on_face(self, x: float = 0, y: float = 0, z: float = 0,
-                              unit: str = None) -> Dict:
+                              unit: str = None, exact_geometry: bool = False) -> Dict:
         """
         Create a new sketch on a face selected by coordinate.
         ADDED v4.1: Enables cut-extrude on existing body faces (not just ref planes).
@@ -108,11 +111,13 @@ class SketchOperations:
             
             # Insert sketch on the selected face
             doc.InsertSketch2(True)
+            doc.SketchManager.AddToDB = exact_geometry
             
             return self._result(True,
                 f"Sketch created on face at ({x}, {y}, {z}) {unit_str}",
                 SwErrors.swSuccess,
-                {"face_point": {"x": x, "y": y, "z": z}, "unit": unit_str})
+                {"face_point": {"x": x, "y": y, "z": z}, "unit": unit_str,
+                 "exact_geometry": exact_geometry})
             
         except Exception as e:
             logger.error(f"Create sketch on face error: {e}\n{traceback.format_exc()}")
@@ -130,6 +135,7 @@ class SketchOperations:
             if err:
                 return err
             
+            doc.SketchManager.AddToDB = False
             doc.InsertSketch2(True)
             
             return self._result(True, "Exited sketch", SwErrors.swSuccess)

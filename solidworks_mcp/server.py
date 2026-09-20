@@ -162,7 +162,8 @@ async def list_tools() -> list[Tool]:
                         "enum": ["Front", "Top", "Right"],
                         "default": "Front",
                         "description": "Plane to sketch on"
-                    }
+                    },
+                    "exact_geometry": {"type": "boolean", "default": False, "description": "Disable automatic sketch relations and snapping for exact programmatic geometry"}
                 },
                 "required": []
             }
@@ -176,7 +177,8 @@ async def list_tools() -> list[Tool]:
                     "x": {"type": "number", "default": 0, "description": "X coordinate on the face"},
                     "y": {"type": "number", "default": 0, "description": "Y coordinate on the face"},
                     "z": {"type": "number", "default": 0, "description": "Z coordinate on the face"},
-                    "unit": {"type": "string", "description": "Unit (mm, inch, m)"}
+                    "unit": {"type": "string", "description": "Unit (mm, inch, m)"},
+                    "exact_geometry": {"type": "boolean", "default": False, "description": "Disable automatic sketch relations and snapping for exact programmatic geometry"}
                 },
                 "required": []
             }
@@ -447,14 +449,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         
         # Sketch Tools
         elif name == "create_sketch":
-            result = sw_automation.create_sketch(arguments.get("plane", "Front"))
+            result = sw_automation.create_sketch(
+                arguments.get("plane", "Front"), arguments.get("exact_geometry", False))
         
         elif name == "create_sketch_on_face":
             result = sw_automation.create_sketch_on_face(
                 arguments.get("x", 0),
                 arguments.get("y", 0),
                 arguments.get("z", 0),
-                arguments.get("unit")
+                arguments.get("unit"),
+                arguments.get("exact_geometry", False)
             )
         
         elif name == "draw_line":
