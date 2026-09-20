@@ -56,6 +56,20 @@ sw_automation = SolidWorksAutomation()
 server = Server("solidworks-mcp-server")
 
 
+def _execute_python_tool() -> Tool:
+    return Tool(
+        name="execute_python",
+        description="Execute custom Python code with stdout capture. Access 'sw' (app), 'doc' (active document). Use print() for debug output.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python code to execute"}
+            },
+            "required": ["code"]
+        }
+    )
+
+
 # ============================================================================
 # Tool Definitions
 # ============================================================================
@@ -325,18 +339,7 @@ async def list_tools() -> list[Tool]:
                 "required": ["unit"]
             }
         ),
-        Tool(
-            name="execute_python",
-            description="Execute custom Python code with stdout capture. Access 'sw' (app), 'doc' (active document). Use print() for debug output.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string", "description": "Python code to execute"}
-                },
-                "required": ["code"]
-            }
-        ),
-    ] + registered_tools()
+    ] + ([] if config.guarded_mode else [_execute_python_tool()]) + registered_tools()
 
 
 # ============================================================================
@@ -513,11 +516,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             }
         
         elif name == "execute_python":
-            code = arguments.get("code", "")
-            if not code:
-                result = sw_automation._result(False, "Code is required", SwErrors.swInvalidInput)
+            if config.guarded_mode:
+                result = sw_automation._result(
+                    False, "execute_python is unavailable in guarded mode.",
+                    SwErrors.swInvalidInput)
             else:
-                result = _execute_python_fixed(code)
+                code = arguments.get("code", "")
+                if not code:
+                    result = sw_automation._result(False, "Code is required", SwErrors.swInvalidInput)
+                else:
+                    result = _execute_python_fixed(code)
         
         else:
             result = dispatch(name, sw_automation, arguments)
