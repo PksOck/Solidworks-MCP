@@ -12,6 +12,7 @@ import win32com.client
 from ..comutil import com
 from ..constants import SwErrors
 from ..registry import tool
+from .guard import require_output_write
 
 logger = logging.getLogger("SolidWorksMCP")
 
@@ -207,6 +208,9 @@ def _face_plane_axes(face):
 )
 def export_face_to_dxf(sw, face_index: int, output_path: str) -> dict:
     """Export a single planar face of the active part to DXF/DWG."""
+    denied = require_output_write(sw, output_path)
+    if denied:
+        return denied
     doc, err = sw.get_active_doc()
     if err:
         return err

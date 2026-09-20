@@ -11,6 +11,7 @@ import win32com.client
 from ..comutil import com
 from ..constants import SwErrors
 from ..registry import tool
+from .guard import require_output_write
 
 logger = logging.getLogger("SolidWorksMCP")
 
@@ -208,6 +209,9 @@ def get_flat_pattern_info(sw) -> dict:
 )
 def export_flat_pattern(sw, output_path: str) -> dict:
     """Export the flat pattern of the active sheet metal part."""
+    denied = require_output_write(sw, output_path)
+    if denied:
+        return denied
     doc, err = sw.get_active_doc()
     if err:
         return err

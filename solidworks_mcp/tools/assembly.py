@@ -11,6 +11,7 @@ import win32com.client
 from ..comutil import com
 from ..constants import SwDocumentTypes, SwErrors, SwMateTypes
 from ..registry import tool
+from .guard import require_output_write
 
 logger = logging.getLogger("SolidWorksMCP")
 
@@ -426,6 +427,9 @@ def list_mates(sw) -> dict:
 )
 def pack_and_go(sw, destination_folder: str, include_drawings: bool = True) -> dict:
     """Pack and Go the active assembly to a destination folder"""
+    denied = require_output_write(sw, destination_folder)
+    if denied:
+        return denied
     asm, err = _require_assembly(sw)
     if err:
         return err
