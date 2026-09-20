@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from solidworks_mcp.workspace.delivery import ArtifactCollisionError, build_delivery_manifest
+from solidworks_mcp.workspace.delivery import (
+    ArtifactCollisionError,
+    build_delivery_manifest,
+)
 
 
 class DeliveryManifestTests(unittest.TestCase):
@@ -37,6 +40,32 @@ class DeliveryManifestTests(unittest.TestCase):
                     {"artifact_id": "one", "path": self.first, "format": "pdf", "publish_name": "frame.pdf"},
                     {"artifact_id": "two", "path": second, "format": "pdf", "publish_name": "frame.pdf"},
                 ],
+                source_revision="r2", configuration="Default", check_ids=[],
+            )
+
+    def test_empty_package_is_rejected(self):
+        with self.assertRaises(ValueError):
+            build_delivery_manifest(
+                [], source_revision="r2", configuration="Default", check_ids=[],
+            )
+
+    def test_publish_name_is_case_insensitive_on_windows(self):
+        second = self.root / "second.pdf"
+        second.write_bytes(b"different")
+
+        with self.assertRaises(ArtifactCollisionError):
+            build_delivery_manifest(
+                [
+                    {"artifact_id": "one", "path": self.first, "format": "pdf", "publish_name": "FRAME.pdf"},
+                    {"artifact_id": "two", "path": second, "format": "pdf", "publish_name": "frame.PDF"},
+                ],
+                source_revision="r2", configuration="Default", check_ids=[],
+            )
+
+    def test_publish_name_cannot_escape_final_package(self):
+        with self.assertRaises(ValueError):
+            build_delivery_manifest(
+                [{"artifact_id": "drawing", "path": self.first, "format": "pdf", "publish_name": "../frame.pdf"}],
                 source_revision="r2", configuration="Default", check_ids=[],
             )
 
