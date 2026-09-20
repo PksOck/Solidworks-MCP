@@ -37,7 +37,7 @@ class SolidWorksAutomation:
         self._config = get_config()
         self._units = UnitConverter(self._config.default_unit)
         self._sw_exe_path = None
-        self._path_policy = None
+        self._path_policy = self._config.create_path_policy()
         
         logger.info("SolidWorksAutomation initialized")
 
