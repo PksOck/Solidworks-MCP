@@ -89,6 +89,11 @@ async def list_tools() -> list[Tool]:
             description="Get SolidWorks installation information.",
             inputSchema={"type": "object", "properties": {}, "required": []}
         ),
+        Tool(
+            name="get_capabilities",
+            description="Report the currently advertised tools, guarded-mode state, and known blocked capabilities.",
+            inputSchema={"type": "object", "properties": {}, "required": []}
+        ),
         
         # Document Tools
         Tool(
@@ -382,6 +387,39 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 "error_code": 0 if info["found"] else 105,
                 "error_name": "swSuccess" if info["found"] else "swSolidWorksNotFound",
                 "data": info
+            }
+
+        elif name == "get_capabilities":
+            advertised = [tool.name for tool in await list_tools()]
+            blocked = [{
+                "name": "pack_and_go",
+                "status": "blocked",
+                "reason": "pywin32 cannot marshal the required BYREF IDispatch Pack-and-Go out parameter."
+            }]
+            if config.guarded_mode:
+                blocked.append({
+                    "name": "execute_python",
+                    "status": "blocked",
+                    "reason": "Raw execution is disabled in guarded mode."
+                })
+            sw_build = None
+            if sw_automation.is_connected:
+                try:
+                    revision = sw_automation.app.RevisionNumber
+                    sw_build = revision() if callable(revision) else revision
+                except Exception:
+                    sw_build = "unavailable"
+            result = {
+                "success": True,
+                "message": "Capability report generated.",
+                "error_code": 0,
+                "error_name": "swSuccess",
+                "data": {
+                    "guarded_mode": config.guarded_mode,
+                    "solidworks_build": sw_build,
+                    "advertised_tools": advertised,
+                    "blocked_capabilities": blocked,
+                }
             }
         
         # Document Tools
