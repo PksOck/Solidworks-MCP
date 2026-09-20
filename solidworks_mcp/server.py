@@ -280,6 +280,7 @@ async def list_tools() -> list[Tool]:
                     "depth": {"type": "number", "default": 10, "description": "Cut depth"},
                     "through_all": {"type": "boolean", "default": False, "description": "Cut through all"},
                     "both_directions": {"type": "boolean", "default": False, "description": "Cut both directions"},
+                    "flip_direction": {"type": "boolean", "description": "Explicit cut direction; omit to retry the opposite direction automatically"},
                     "unit": {"type": "string", "description": "Unit"}
                 },
                 "required": []
@@ -514,7 +515,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 arguments.get("depth", 10),
                 arguments.get("through_all", False),
                 arguments.get("both_directions", False),
-                arguments.get("unit")
+                arguments.get("unit"),
+                arguments.get("flip_direction")
             )
         
         elif name == "fillet_edges":

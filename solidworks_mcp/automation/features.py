@@ -52,16 +52,16 @@ class FeatureOperations:
         """
         last_sketch = None
         try:
-            feat = doc.FirstFeature
+            feat = com(doc, "FirstFeature")
             while feat is not None:
                 try:
-                    feat_type = feat.GetTypeName2
+                    feat_type = com(feat, "GetTypeName2")
                     if feat_type == "ProfileFeature":
-                        last_sketch = feat.Name
+                        last_sketch = com(feat, "Name")
                 except:
                     pass
                 try:
-                    feat = feat.GetNextFeature
+                    feat = com(feat, "GetNextFeature")
                 except:
                     break
         except Exception as e:
@@ -297,7 +297,8 @@ class FeatureOperations:
     # ========================================================================
     
     def cut_extrude(self, depth: float = 10, through_all: bool = False,
-                    both_directions: bool = False, unit: str = None) -> Dict:
+                    both_directions: bool = False, unit: str = None,
+                    flip_direction: Optional[bool] = None) -> Dict:
         """
         Cut extrude (remove material)
         FIXED v4.0: Proper sketch handling and parameter counts
@@ -307,6 +308,8 @@ class FeatureOperations:
             through_all: Cut through entire model
             both_directions: Cut in both directions
             unit: Unit for depth
+            flip_direction: Explicit SolidWorks Dir value. None tries the default
+                direction first and retries once in the opposite direction.
         
         Returns:
             Result dictionary
@@ -347,14 +350,16 @@ class FeatureOperations:
             
             feat = None
             method_used = ""
-            
-            # Method 1: FeatureCut3 (26 params - most reliable for SW 2025)
-            # Verified working parameter signature from SolidWorks API testing
-            try:
-                feat = doc.FeatureManager.FeatureCut3(
+            used_direction = False
+            directions = [bool(flip_direction)] if flip_direction is not None else [False, True]
+
+            for direction in directions:
+                # FeatureCut3 is the live-verified SolidWorks 2025 path.
+                try:
+                    feat = doc.FeatureManager.FeatureCut3(
                     True,           # Sd - single direction
                     False,          # Flip
-                    False,          # Dir
+                    direction,      # Dir
                     end_cond,       # T1 - end condition
                     0,              # T2 - end condition 2
                     cut_depth,      # D1 - depth
@@ -369,19 +374,20 @@ class FeatureOperations:
                     0,              # T0 - start condition
                     0.0,            # StartOffset
                     False           # FlipStartOffset
-                )
-                if feat:
-                    method_used = "FeatureCut3"
-            except Exception as e:
-                logger.debug(f"FeatureCut3 (26p) failed: {e}")
-            
-            # Method 2: FeatureCut4 (SW 2014+ - may need different param count)
-            if feat is None:
+                    )
+                    if feat:
+                        method_used = "FeatureCut3"
+                        used_direction = direction
+                        break
+                except Exception as e:
+                    logger.debug(f"FeatureCut3 (26p, Dir={direction}) failed: {e}")
+
+                # Compatibility fallback for installations exposing FeatureCut4.
                 try:
                     feat = doc.FeatureManager.FeatureCut4(
                         True,           # Sd
                         False,          # Flip
-                        False,          # Dir
+                        direction,      # Dir
                         end_cond,       # T1
                         0,              # T2
                         cut_depth,      # D1
@@ -400,8 +406,10 @@ class FeatureOperations:
                     )
                     if feat:
                         method_used = "FeatureCut4"
+                        used_direction = direction
+                        break
                 except Exception as e:
-                    logger.debug(f"FeatureCut4 failed: {e}")
+                    logger.debug(f"FeatureCut4 (Dir={direction}) failed: {e}")
             
             if feat is None:
                 return self._result(False,
@@ -416,7 +424,8 @@ class FeatureOperations:
                               SwErrors.swSuccess,
                               {"depth": depth, "through_all": through_all,
                                "sketch_name": sketch_name,
-                               "api_method": method_used})
+                               "api_method": method_used,
+                               "flip_direction": used_direction})
             
         except Exception as e:
             logger.error(f"Cut extrude error: {e}\n{traceback.format_exc()}")
