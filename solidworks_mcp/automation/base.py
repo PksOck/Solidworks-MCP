@@ -44,6 +44,11 @@ class SolidWorksAutomation:
     def set_path_policy(self, policy) -> None:
         """Install the trusted write policy used by document operations."""
         self._path_policy = policy
+
+    def _get_revision_number(self):
+        """Read RevisionNumber from both generated-method and dynamic COM bindings."""
+        value = self._sw_app.RevisionNumber
+        return value() if callable(value) else value
     
     # ========================================================================
     # Properties
@@ -57,17 +62,12 @@ class SolidWorksAutomation:
         
         try:
             # Test connection by accessing a property
-            _ = self._sw_app.RevisionNumber
+            _ = self._get_revision_number()
             return True
         except:
-            try:
-                # Some versions use method instead of property
-                _ = self._sw_app.RevisionNumber()
-                return True
-            except:
-                self._connected = False
-                self._sw_app = None
-                return False
+            self._connected = False
+            self._sw_app = None
+            return False
     
     @property
     def units(self) -> UnitConverter:
@@ -141,10 +141,7 @@ class SolidWorksAutomation:
                     self._sw_app.Visible = True
                     
                     # Get version (property or method)
-                    try:
-                        version = self._sw_app.RevisionNumber
-                    except:
-                        version = self._sw_app.RevisionNumber()
+                    version = self._get_revision_number()
                     
                     logger.info(f"Connected via method {i+1}: {version}")
                     self._connected = True
@@ -168,10 +165,7 @@ class SolidWorksAutomation:
             
             # Step 1: Try connecting to running instance
             if self._try_connect_com():
-                try:
-                    version = self._sw_app.RevisionNumber
-                except:
-                    version = self._sw_app.RevisionNumber()
+                version = self._get_revision_number()
                 
                 return self._result(True, f"Connected to SolidWorks {version}",
                                   SwErrors.swSuccess,
@@ -205,10 +199,7 @@ class SolidWorksAutomation:
                 logger.debug(f"Connection attempt at {elapsed}s...")
                 
                 if self._try_connect_com():
-                    try:
-                        version = self._sw_app.RevisionNumber
-                    except:
-                        version = self._sw_app.RevisionNumber()
+                    version = self._get_revision_number()
                     
                     logger.info(f"Connected after {elapsed}s")
                     return self._result(True,
