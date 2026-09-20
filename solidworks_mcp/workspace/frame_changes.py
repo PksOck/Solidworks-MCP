@@ -31,3 +31,9 @@ def interpret_frame_request(request: str) -> dict[str, Any]:
         "changes": [],
         "reasons": ["width_change_requires_an_explicit_absolute_or_delta_dimension"],
     }
+
+
+def validate_frame_invariants(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """Return every required frame property that changed or became unavailable."""
+    invariants = ("profile", "material", "height_mm", "body_count", "joints")
+    return [name for name in invariants if after.get(name) != before.get(name)]
