@@ -21,11 +21,14 @@ def list_planes(sw) -> dict:
         {"name": SwPlanes.TOP, "kind": "standard"},
         {"name": SwPlanes.RIGHT, "kind": "standard"},
     ]
+    standard_names = {plane["name"] for plane in planes}
     try:
         feature = com(doc, "FirstFeature")
         while feature is not None:
             if com(feature, "GetTypeName2") == "RefPlane":
-                planes.append({"name": com(feature, "Name"), "kind": "reference"})
+                name = com(feature, "Name")
+                if name not in standard_names:
+                    planes.append({"name": name, "kind": "reference"})
             feature = com(feature, "GetNextFeature")
     except Exception as error:
         return sw._result(False, f"Could not inspect reference planes: {error}",

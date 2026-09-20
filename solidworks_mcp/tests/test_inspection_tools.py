@@ -37,6 +37,17 @@ class InspectionToolTests(unittest.TestCase):
                          [plane["name"] for plane in planes])
         self.assertEqual("reference", planes[-1]["kind"])
 
+    def test_standard_planes_enumerated_as_ref_planes_are_not_duplicated(self):
+        custom = Feature("Offset 25", "RefPlane")
+        right = Feature("Right Plane", "RefPlane", custom)
+        top = Feature("Top Plane", "RefPlane", right)
+        front = Feature("Front Plane", "RefPlane", top)
+
+        result = list_planes(Automation(Document(front)))
+
+        self.assertEqual(["Front Plane", "Top Plane", "Right Plane", "Offset 25"],
+                         [plane["name"] for plane in result["data"]["planes"]])
+
 
 if __name__ == "__main__":
     unittest.main()
