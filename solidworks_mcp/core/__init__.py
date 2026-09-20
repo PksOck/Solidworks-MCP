@@ -2,6 +2,7 @@
 
 from .contracts import DocumentRef, OperationError, OperationResult, OperationStatus
 from .evidence import OperationJournal
+from .snapshot import InstanceRef, ProjectSnapshot, SnapshotCoverage
 
 __all__ = [
     "DocumentRef",
@@ -9,4 +10,7 @@ __all__ = [
     "OperationJournal",
     "OperationResult",
     "OperationStatus",
+    "InstanceRef",
+    "ProjectSnapshot",
+    "SnapshotCoverage",
 ]
