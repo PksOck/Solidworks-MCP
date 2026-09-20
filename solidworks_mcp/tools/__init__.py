@@ -11,5 +11,6 @@ from . import sheetmetal  # noqa: F401
 from . import assembly  # noqa: F401
 from . import cutlist  # noqa: F401
 from . import drawings  # noqa: F401
+from . import inspection  # noqa: F401
 
-__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings"]
+__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection"]
