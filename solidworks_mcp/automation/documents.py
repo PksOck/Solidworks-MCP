@@ -7,6 +7,7 @@ Create, open, save, and manage SolidWorks documents.
 import os
 import logging
 import traceback
+from pathlib import Path
 from typing import Optional, Dict
 
 import win32com.client
@@ -14,6 +15,7 @@ import pythoncom
 
 from ..comutil import com
 from ..constants import SwErrors, SwDocumentTypes, SwFileTypes
+from ..core.policy import OperationClass, WriteDeniedError
 from ..utils import find_template
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,20 @@ class DocumentOperations:
     - self._result(): Result factory method
     - self._units: UnitConverter instance
     """
+
+    def _guard_write(self, path: str | None, operation_class: OperationClass):
+        """Return a legacy error result if an installed policy denies a write."""
+        policy = getattr(self, "_path_policy", None)
+        if policy is None:
+            return None
+        if not path:
+            return self._result(False, "Write denied: unsaved document has no approved output path.",
+                                SwErrors.swFileSaveError)
+        try:
+            policy.require_write(Path(path), operation_class)
+        except WriteDeniedError as error:
+            return self._result(False, f"Write denied: {error}", SwErrors.swFileSaveError)
+        return None
     
     def create_new_part(self) -> Dict:
         """
@@ -218,6 +234,9 @@ class DocumentOperations:
                 return err
             
             if filepath:
+                denied = self._guard_write(filepath, OperationClass.MUTATE)
+                if denied:
+                    return denied
                 # Ensure absolute path
                 filepath = os.path.abspath(filepath)
                 
@@ -278,6 +297,9 @@ class DocumentOperations:
                                   {"path": filepath, "method": method_used})
             else:
                 # Save in place
+                denied = self._guard_write(self._get_doc_path(doc), OperationClass.MUTATE)
+                if denied:
+                    return denied
                 result = doc.Save3(0, 0, 0)
                 
                 if result != 0:
@@ -310,6 +332,9 @@ class DocumentOperations:
             title = self._get_doc_title(doc)
             
             if save:
+                denied = self._guard_write(self._get_doc_path(doc), OperationClass.MUTATE)
+                if denied:
+                    return denied
                 doc.Save3(0, 0, 0)
             
             self._sw_app.CloseDoc(title)
