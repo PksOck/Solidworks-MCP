@@ -1,5 +1,8 @@
 """Read-only geometric and physical measurements."""
 
+import pythoncom
+import win32com.client
+
 from ..comutil import com
 from ..constants import SwErrors
 from ..registry import tool
@@ -11,6 +14,101 @@ _LENGTH_FACTORS = {
     "mm": 1000.0,
     "inch": 39.37007874015748,
 }
+
+
+def _get_planar_face_by_index(doc, face_index: int):
+    """Resolve the same all-face index exposed by list_planar_faces."""
+    if not isinstance(face_index, int) or isinstance(face_index, bool) or face_index < 0:
+        return None
+    index = 0
+    for body in com(doc, "GetBodies2", 0, True) or []:
+        for face in com(body, "GetFaces") or []:
+            if index == face_index:
+                surface = com(face, "GetSurface")
+                return face if surface is not None and com(surface, "IsPlane") else None
+            index += 1
+    return None
+
+
+@tool(
+    name="measure_distance",
+    description=(
+        "Measure the kernel minimum distance between two planar faces by their "
+        "current list_planar_faces indexes. Re-list faces after model changes."
+    ),
+    schema={"type": "object", "properties": {
+        "face_index1": {"type": "integer", "minimum": 0},
+        "face_index2": {"type": "integer", "minimum": 0},
+        "length_unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                        "default": "mm"},
+    }, "required": ["face_index1", "face_index2"]},
+)
+def measure_distance(sw, face_index1: int, face_index2: int,
+                     length_unit: str = "mm") -> dict:
+    """Return minimum face-to-face distance, axis deltas, and relation flags."""
+    if length_unit not in _LENGTH_FACTORS:
+        return sw._result(False, f"Unsupported length unit: {length_unit}",
+                          SwErrors.swInvalidInput)
+    if face_index1 == face_index2:
+        return sw._result(False, "Two different planar face indexes are required.",
+                          SwErrors.swInvalidInput)
+    doc, err = sw.get_active_doc()
+    if err:
+        return err
+    first = _get_planar_face_by_index(doc, face_index1)
+    second = _get_planar_face_by_index(doc, face_index2)
+    if first is None or second is None:
+        return sw._result(False,
+                          "A face index is missing or no longer refers to a planar face; run list_planar_faces again.",
+                          SwErrors.swSelectionError)
+
+    doc.ClearSelection2(True)
+    try:
+        empty_select_data = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        if not com(first, "Select4", False, empty_select_data):
+            return sw._result(False, f"Could not select planar face {face_index1}.",
+                              SwErrors.swSelectionError)
+        if not com(second, "Select4", True, empty_select_data):
+            return sw._result(False, f"Could not select planar face {face_index2}.",
+                              SwErrors.swSelectionError)
+
+        measure = com(com(doc, "Extension"), "CreateMeasure")
+        if measure is None:
+            return sw._result(False, "SolidWorks could not create the measurement object.",
+                              SwErrors.swUnknownError)
+        # SW 2025 dynamic dispatch exposes Calculate as a property unless it is
+        # explicitly marked as a method. The supported VBA/API path measures the
+        # currently selected entities by passing NULL.
+        measure._FlagAsMethod("Calculate")
+        if not measure.Calculate(None):
+            return sw._result(False, "SolidWorks could not calculate the face distance.",
+                              SwErrors.swUnknownError)
+
+        factor = _LENGTH_FACTORS[length_unit]
+        distance_m = float(com(measure, "Distance"))
+        normal_m = float(com(measure, "NormalDistance"))
+        delta_m = {
+            "x": float(com(measure, "DeltaX")),
+            "y": float(com(measure, "DeltaY")),
+            "z": float(com(measure, "DeltaZ")),
+        }
+        data = {
+            "distance": distance_m * factor,
+            "normal_distance": normal_m * factor,
+            "delta": {axis: value * factor for axis, value in delta_m.items()},
+            "unit": length_unit,
+            "distance_kind": "minimum",
+            "accuracy": "kernel",
+            "method": "IMeasure.Calculate(selected planar faces)",
+            "is_intersecting": bool(com(measure, "IsIntersect")),
+            "is_parallel": bool(com(measure, "IsParallel")),
+            "face_indexes": [face_index1, face_index2],
+        }
+        return sw._result(True,
+                          f"Minimum distance: {data['distance']:.6f} {length_unit}",
+                          data=data)
+    finally:
+        doc.ClearSelection2(True)
 
 
 @tool(
