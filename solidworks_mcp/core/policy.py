@@ -31,7 +31,11 @@ class WriteDeniedError(PermissionError):
 class PathPolicy:
     """Permit writes only under canonical approved output roots."""
 
-    _WRITE_CLASSES = frozenset({OperationClass.MUTATE, OperationClass.EXPORT})
+    _WRITE_CLASSES = frozenset({
+        OperationClass.STATEFUL_READ,
+        OperationClass.MUTATE,
+        OperationClass.EXPORT,
+    })
 
     def __init__(self, output_roots: Iterable[Path], protected_roots: Iterable[Path] = ()) -> None:
         self.output_roots = tuple(self._canonical(root) for root in output_roots)

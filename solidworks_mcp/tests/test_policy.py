@@ -50,6 +50,12 @@ class PathPolicyTests(unittest.TestCase):
         with self.assertRaises(WriteDeniedError):
             self.policy.require_write(self.output_root / "frame.SLDPRT", OperationClass.READ)
 
+    def test_allows_stateful_read_only_inside_approved_output_root(self):
+        allowed = self.policy.require_write(
+            self.output_root / "frame.SLDPRT", OperationClass.STATEFUL_READ)
+
+        self.assertEqual((self.output_root / "frame.SLDPRT").resolve(), allowed)
+
 
 if __name__ == "__main__":
     unittest.main()
