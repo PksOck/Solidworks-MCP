@@ -16,6 +16,7 @@ Fixes v4.0.0:
 """
 
 import logging
+import math
 import traceback
 from typing import Optional, Dict
 
@@ -435,6 +436,54 @@ class FeatureOperations:
     # ========================================================================
     # Fillet
     # ========================================================================
+
+    def revolve_sketch(self, angle: float = 360,
+                       axis: str = "centerline") -> Dict:
+        """Revolve the latest closed sketch around its construction centerline."""
+        try:
+            doc, err = self.get_active_doc()
+            if err:
+                return err
+            if angle <= 0 or angle > 360:
+                return self._result(False,
+                                    "Revolve angle must be greater than 0 and at most 360 degrees.",
+                                    SwErrors.swInvalidInput)
+            if axis.lower() != "centerline":
+                return self._result(False,
+                                    "Only an internal sketch centerline is currently supported as the revolve axis.",
+                                    SwErrors.swInvalidInput)
+
+            success, sketch_name, error_msg = self._close_and_select_sketch(doc)
+            if not success:
+                return self._result(False, f"Revolve failed: {error_msg}",
+                                    SwErrors.swFeatureError)
+
+            feature = doc.FeatureManager.FeatureRevolve2(
+                True, True, False, False, False, False,
+                0, 0, math.radians(angle), 0.0,
+                False, False, 0.0, 0.0,
+                0, 0.0, 0.0,
+                True, True, True,
+            )
+            if feature is None:
+                return self._result(False,
+                                    f"Revolve failed on sketch '{sketch_name}'. The sketch needs one closed profile and one construction centerline.",
+                                    SwErrors.swFeatureError,
+                                    {"sketch_name": sketch_name})
+
+            feature_name = com(feature, "Name")
+            return self._result(True,
+                                f"Revolved {angle} degrees around the sketch centerline.",
+                                SwErrors.swSuccess, {
+                                    "angle_degrees": angle,
+                                    "axis": "centerline",
+                                    "sketch_name": sketch_name,
+                                    "feature_name": feature_name,
+                                    "api_method": "FeatureRevolve2",
+                                })
+        except Exception as e:
+            logger.error(f"Revolve error: {e}\n{traceback.format_exc()}")
+            return self._result(False, f"Error: {e}", SwErrors.swFeatureError)
     
     def fillet_edges(self, radius: float = 2, unit: str = None) -> Dict:
         """

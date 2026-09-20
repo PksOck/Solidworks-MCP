@@ -336,6 +336,22 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="revolve_sketch",
+            description="Revolve the latest closed sketch around its construction centerline.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "angle": {"type": "number", "exclusiveMinimum": 0,
+                              "maximum": 360, "default": 360,
+                              "description": "Revolution angle in degrees"},
+                    "axis": {"type": "string", "enum": ["centerline"],
+                             "default": "centerline",
+                             "description": "Supported axis mode"}
+                },
+                "required": []
+            }
+        ),
+        Tool(
             name="fillet_edges",
             description="Add fillet to selected edges.",
             inputSchema={
@@ -585,6 +601,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 arguments.get("both_directions", False),
                 arguments.get("unit"),
                 arguments.get("flip_direction")
+            )
+
+        elif name == "revolve_sketch":
+            result = sw_automation.revolve_sketch(
+                arguments.get("angle", 360),
+                arguments.get("axis", "centerline")
             )
         
         elif name == "fillet_edges":
