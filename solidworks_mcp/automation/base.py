@@ -37,8 +37,13 @@ class SolidWorksAutomation:
         self._config = get_config()
         self._units = UnitConverter(self._config.default_unit)
         self._sw_exe_path = None
+        self._path_policy = None
         
         logger.info("SolidWorksAutomation initialized")
+
+    def set_path_policy(self, policy) -> None:
+        """Install the trusted write policy used by document operations."""
+        self._path_policy = policy
     
     # ========================================================================
     # Properties
