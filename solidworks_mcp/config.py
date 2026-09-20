@@ -59,6 +59,11 @@ class SolidWorksConfig:
     # View capture defaults
     capture_width: int = 1920
     capture_height: int = 1080
+
+    # Guarded write workflow. Roots are trusted server configuration, never tool arguments.
+    guarded_mode: bool = False
+    output_roots: list[str] = field(default_factory=list)
+    protected_roots: list[str] = field(default_factory=list)
     
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -158,6 +163,19 @@ class SolidWorksConfig:
             "CRITICAL": logging.CRITICAL,
         }
         return levels.get(self.log_level.upper(), logging.INFO)
+
+    def create_path_policy(self):
+        """Build the write policy only when guarded workflow is explicitly enabled."""
+        if not self.guarded_mode:
+            return None
+        if not self.output_roots:
+            raise ValueError("guarded_mode requires at least one trusted output_root")
+        from .core.policy import PathPolicy
+
+        return PathPolicy(
+            output_roots=[Path(root) for root in self.output_roots],
+            protected_roots=[Path(root) for root in self.protected_roots],
+        )
 
 
 # ============================================================================
