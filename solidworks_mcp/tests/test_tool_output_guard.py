@@ -6,6 +6,7 @@ from solidworks_mcp.core.policy import PathPolicy
 from solidworks_mcp.tools.assembly import pack_and_go
 from solidworks_mcp.tools.export import export_face_to_dxf
 from solidworks_mcp.tools.sheetmetal import export_flat_pattern
+from solidworks_mcp.tools.sheetmetal import flatten_sheet_metal, get_flat_pattern_info
 
 
 class ProtectedOutputProbe:
@@ -57,6 +58,36 @@ class ToolOutputGuardTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertFalse(probe.com_touched)
+
+    def test_flatten_rejects_protected_active_document_before_feature_access(self):
+        class DocumentProbe:
+            GetPathName = str(self.references / "original.SLDPRT")
+
+            @property
+            def FirstFeature(self):
+                raise AssertionError("feature access must be blocked")
+
+        probe = ProtectedOutputProbe(self.policy)
+        probe.get_active_doc = lambda: (DocumentProbe(), None)
+
+        result = flatten_sheet_metal(probe, True)
+
+        self.assertFalse(result["success"])
+
+    def test_flat_pattern_info_rejects_protected_active_document_before_feature_access(self):
+        class DocumentProbe:
+            GetPathName = str(self.references / "original.SLDPRT")
+
+            @property
+            def FirstFeature(self):
+                raise AssertionError("feature access must be blocked")
+
+        probe = ProtectedOutputProbe(self.policy)
+        probe.get_active_doc = lambda: (DocumentProbe(), None)
+
+        result = get_flat_pattern_info(probe)
+
+        self.assertFalse(result["success"])
 
 
 if __name__ == "__main__":

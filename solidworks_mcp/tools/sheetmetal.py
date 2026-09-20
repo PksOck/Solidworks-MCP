@@ -11,7 +11,7 @@ import win32com.client
 from ..comutil import com
 from ..constants import SwErrors
 from ..registry import tool
-from .guard import require_output_write
+from .guard import require_output_write, require_stateful_document_access
 
 logger = logging.getLogger("SolidWorksMCP")
 
@@ -102,6 +102,9 @@ def flatten_sheet_metal(sw, flatten: bool) -> dict:
     doc, err = sw.get_active_doc()
     if err:
         return err
+    denied = require_stateful_document_access(sw, doc)
+    if denied:
+        return denied
 
     feat = _find_flat_pattern_feature(doc)
     if feat is None:
@@ -147,6 +150,9 @@ def get_flat_pattern_info(sw) -> dict:
     doc, err = sw.get_active_doc()
     if err:
         return err
+    denied = require_stateful_document_access(sw, doc)
+    if denied:
+        return denied
 
     feat = _find_flat_pattern_feature(doc)
     if feat is None:
