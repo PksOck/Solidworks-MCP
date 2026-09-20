@@ -14,6 +14,62 @@ _LENGTH_FACTORS = {
 
 
 @tool(
+    name="get_body_bounding_box",
+    description="Read approximate per-body and combined bounding boxes for the active part.",
+    schema={"type": "object", "properties": {
+        "length_unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
+        "visible_only": {"type": "boolean", "default": True},
+    }, "required": []},
+)
+def get_body_bounding_box(sw, length_unit: str = "mm", visible_only: bool = True) -> dict:
+    """Return approximate boxes; callers must not treat them as tolerance measurements."""
+    if length_unit not in _LENGTH_FACTORS:
+        return sw._result(False, f"Unsupported length unit: {length_unit}", SwErrors.swInvalidInput)
+    doc, err = sw.get_active_doc()
+    if err:
+        return err
+    bodies = com(doc, "GetBodies2", 0, visible_only) or []
+    if not bodies:
+        return sw._result(False, "No solid bodies found.", SwErrors.swUnknownError)
+
+    factor = _LENGTH_FACTORS[length_unit]
+    entries = []
+    boxes = []
+    for index, body in enumerate(bodies):
+        box = [float(value) for value in com(body, "GetBodyBox")]
+        boxes.append(box)
+        try:
+            name = com(body, "Name")
+        except Exception:
+            name = f"Body{index + 1}"
+        entries.append({
+            "name": name,
+            "min": {"x": box[0] * factor, "y": box[1] * factor, "z": box[2] * factor},
+            "max": {"x": box[3] * factor, "y": box[4] * factor, "z": box[5] * factor},
+            "size": {"x": (box[3] - box[0]) * factor,
+                     "y": (box[4] - box[1]) * factor,
+                     "z": (box[5] - box[2]) * factor},
+        })
+    combined = [min(box[i] for box in boxes) for i in range(3)] + [
+        max(box[i] for box in boxes) for i in range(3, 6)]
+    data = {
+        "unit": length_unit,
+        "accuracy": "approximate",
+        "method": "IBody2.GetBodyBox",
+        "visible_only": visible_only,
+        "bodies": entries,
+        "combined": {
+            "min": {"x": combined[0] * factor, "y": combined[1] * factor, "z": combined[2] * factor},
+            "max": {"x": combined[3] * factor, "y": combined[4] * factor, "z": combined[5] * factor},
+            "size": {"x": (combined[3] - combined[0]) * factor,
+                     "y": (combined[4] - combined[1]) * factor,
+                     "z": (combined[5] - combined[2]) * factor},
+        },
+    }
+    return sw._result(True, f"Approximate bounding box for {len(entries)} body/bodies.", data=data)
+
+
+@tool(
     name="get_mass_properties",
     description="Read volume, area, mass, density, and center of mass without modifying the active model.",
     schema={"type": "object", "properties": {
