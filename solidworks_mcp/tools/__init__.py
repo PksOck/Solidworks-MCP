@@ -13,5 +13,6 @@ from . import cutlist  # noqa: F401
 from . import drawings  # noqa: F401
 from . import inspection  # noqa: F401
 from . import patterns  # noqa: F401
+from . import measurements  # noqa: F401
 
-__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns"]
+__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements"]
