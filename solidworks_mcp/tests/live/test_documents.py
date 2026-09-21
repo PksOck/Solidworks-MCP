@@ -3,13 +3,16 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
+import pythoncom
+import win32com.client
+
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.constants import SwDocumentTypes
 from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
-from solidworks_mcp.tools.advanced_features import shell_feature
+from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
@@ -261,6 +264,34 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertIsNone(error)
         return len(com(document, "GetBodies2", 0, True) or [])
 
+    def _sketch_names(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        names = []
+        retained = []
+        feature = com(document, "FirstFeature")
+        while feature is not None:
+            retained.append(feature)
+            if com(feature, "GetTypeName2") == "ProfileFeature":
+                names.append(com(feature, "Name"))
+            feature = com(feature, "GetNextFeature")
+        return names
+
+    def _close_sketch(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        com(document, "InsertSketch2", True)
+
+    def _sketch_on_plane(self, plane_name):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        com(document, "ClearSelection2", True)
+        empty = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        selected = com(document.Extension, "SelectByID2", plane_name, "PLANE",
+                       0.0, 0.0, 0.0, False, 0, empty, 0)
+        self.assertTrue(selected, f"Could not select plane {plane_name}")
+        com(document, "InsertSketch2", True)
+
     def _total_volume_mm3(self):
         document, error = self.automation.get_active_doc()
         self.assertIsNone(error)
@@ -270,6 +301,51 @@ class LiveDocumentTargetTests(unittest.TestCase):
             retained.append(body)
             total += com(body, "GetMassProperties", 0.0)[3] * 1e9
         return total
+
+    def test_sweep_scratch_profile_along_path_without_saving(self):
+        self._new_part()
+        profile = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(profile["success"], profile["message"])
+        circle = self.automation.draw_circle(0, 0, 2, "mm")
+        self.assertTrue(circle["success"], circle["message"])
+        self._close_sketch()
+        path = self.automation.create_sketch("Top", exact_geometry=True)
+        self.assertTrue(path["success"], path["message"])
+        line = self.automation.draw_line(0, 0, 0, 50, "mm")
+        self.assertTrue(line["success"], line["message"])
+        self._close_sketch()
+        profile_name, path_name = self._sketch_names()
+
+        result = sweep_sketch(self.automation, profile_name, path_name)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(628.319, self._total_volume_mm3(), delta=1.0)
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_loft_scratch_profiles_without_saving(self):
+        self._new_part()
+        first = self.automation.create_sketch("Top", exact_geometry=True)
+        self.assertTrue(first["success"], first["message"])
+        circle = self.automation.draw_circle(0, 0, 5, "mm")
+        self.assertTrue(circle["success"], circle["message"])
+        self._close_sketch()
+        reference_plane = create_reference_plane(self.automation, "Top Plane", 20, "mm")
+        self.assertTrue(reference_plane["success"], reference_plane["message"])
+        self._sketch_on_plane("Plane1")
+        second_circle = self.automation.draw_circle(0, 0, 3, "mm")
+        self.assertTrue(second_circle["success"], second_circle["message"])
+        self._close_sketch()
+        first_name, second_name = self._sketch_names()
+
+        result = loft_sketches(self.automation, [first_name, second_name])
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(1026.039, self._total_volume_mm3(), delta=1.0)
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
 
     def test_mirror_scratch_extrusion_about_front_plane_without_saving(self):
         self._new_part()
