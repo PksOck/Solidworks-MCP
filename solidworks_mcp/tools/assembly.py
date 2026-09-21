@@ -183,17 +183,22 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
 @tool(
     name="list_components",
     description="List the components of the active assembly: name, path, fixed/floating state.",
-    schema={"type": "object", "properties": {}, "required": []},
+    schema={"type": "object", "properties": {
+        "depth": {"type": "integer", "minimum": 1, "maximum": 32, "default": 32},
+    }, "required": []},
     operation_class=OperationClass.READ,
 )
-def list_components(sw) -> dict:
+def list_components(sw, depth: int = 32) -> dict:
     """List all component instances of the active assembly recursively."""
+    if not isinstance(depth, int) or isinstance(depth, bool) or not 1 <= depth <= 32:
+        return sw._result(False, "depth must be an integer from 1 to 32.", SwErrors.swInvalidInput)
     asm, err = _require_assembly(sw)
     if err:
         return err
 
     comps = []
     unresolved = []
+    truncated = False
 
     def optional_component_value(comp, member, instance_path):
         try:
@@ -213,28 +218,46 @@ def list_components(sw) -> dict:
             unresolved.append(f"{instance_path}: Transform2.ArrayData unavailable ({error})")
             return None
 
-    def visit(comp, parent_path=None):
+    suppression_names = {
+        0: "suppressed",
+        1: "lightweight",
+        2: "resolved",
+        3: "fully_lightweight",
+        4: "internal_id_mismatch",
+    }
+
+    def visit(comp, parent_path=None, level=1):
+        nonlocal truncated
         name = com(comp, "Name2")
         instance_path = f"{parent_path}/{name}" if parent_path else name
-        # swComponentSuppressionState_e: swComponentSuppressed = 0 (TLB-verified)
+        suppression = optional_component_value(comp, "GetSuppression", instance_path)
+        path = optional_component_value(comp, "GetPathName", instance_path)
+        virtual = optional_component_value(comp, "IsVirtual", instance_path)
         comps.append({
             "name": name,
             "instance_path": instance_path,
             "parent_path": parent_path,
-            "path": com(comp, "GetPathName"),
+            "path": path or None,
             "configuration": optional_component_value(
                 comp, "ReferencedConfiguration", instance_path),
             "transform": transform_data(comp, instance_path),
-            "is_fixed": bool(com(comp, "IsFixed")),
-            "suppressed": com(comp, "GetSuppression") == 0,
+            "is_fixed": bool(optional_component_value(comp, "IsFixed", instance_path)),
+            "suppressed": suppression == 0 if suppression is not None else None,
+            "suppression_state": suppression_names.get(suppression, "unknown"),
+            "lightweight": suppression in {1, 3} if suppression is not None else None,
+            "virtual": bool(virtual) if virtual is not None else None,
         })
         try:
             children = com(comp, "GetChildren") or []
         except Exception as error:
             unresolved.append(f"{instance_path}: children unavailable ({error})")
             return
+        if level >= depth:
+            if children:
+                truncated = True
+            return
         for child in children:
-            visit(child, instance_path)
+            visit(child, instance_path, level + 1)
 
     for component in com(asm, "GetComponents", True) or []:
         visit(component)
@@ -244,10 +267,10 @@ def list_components(sw) -> dict:
         data={
             "components": comps,
             "coverage": {
-                "complete": not unresolved,
+                "complete": not unresolved and not truncated,
                 "visited_count": len(comps),
                 "unresolved": unresolved,
-                "truncated": False,
+                "truncated": truncated,
                 "next_cursor": None,
             },
         })

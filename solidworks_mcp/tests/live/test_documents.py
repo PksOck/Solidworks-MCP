@@ -3,6 +3,7 @@ import unittest
 
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.core.session import TargetMismatchError
+from solidworks_mcp.tools.inspection import inspect_document
 
 
 @unittest.skipUnless(
@@ -56,6 +57,17 @@ class LiveDocumentTargetTests(unittest.TestCase):
 
         self.assertTrue(result["success"], result["message"])
         self.assertEqual(owner, self.automation._com_owner_thread_id)
+
+    def test_inspect_unsaved_part_returns_versioned_summary_without_saving(self):
+        self._new_part()
+
+        result = inspect_document(self.automation, sections=["summary"])
+
+        self.assertTrue(result["success"], result["message"])
+        snapshot = result["data"]["snapshot"]
+        self.assertEqual("part", snapshot["documents"][0]["document_type"])
+        self.assertIsNone(snapshot["documents"][0]["path"])
+        self.assertEqual("known", snapshot["observations"][0]["state"])
 
 
 if __name__ == "__main__":
