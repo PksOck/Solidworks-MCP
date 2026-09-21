@@ -11,13 +11,22 @@ from typing import Callable, Dict, List, Optional
 
 from mcp.types import Tool
 
+from .constants import SwErrors
+from .core.policy import OperationClass
+from .core.session import TargetMismatchError
+
 logger = logging.getLogger("SolidWorksMCP")
 
 _TOOLS: Dict[str, Dict] = {}
 _loaded = False
 
 
-def tool(name: str, description: str, schema: Dict) -> Callable:
+def tool(
+    name: str,
+    description: str,
+    schema: Dict,
+    operation_class: OperationClass,
+) -> Callable:
     """
     Register a function as an MCP tool.
 
@@ -38,7 +47,8 @@ def tool(name: str, description: str, schema: Dict) -> Callable:
             raise ValueError(f"Tool already registered: {name}")
         _TOOLS[name] = {
             "tool": Tool(name=name, description=description, inputSchema=schema),
-            "handler": fn
+            "handler": fn,
+            "operation_class": operation_class,
         }
         return fn
     return decorator
@@ -79,7 +89,35 @@ def dispatch(name: str, sw, arguments: Dict) -> Optional[Dict]:
     entry = _TOOLS.get(name)
     if entry is None:
         return None
+    operation_class = entry["operation_class"]
+    guarded_classes = {
+        OperationClass.STATEFUL_READ,
+        OperationClass.MUTATE,
+        OperationClass.EXPORT,
+    }
+    before = None
+    if operation_class in guarded_classes and hasattr(sw, "bind_active_document"):
+        try:
+            if hasattr(sw, "has_bound_document") and sw.has_bound_document():
+                before = sw.require_bound_active_document()
+            else:
+                before = sw.bind_active_document()
+        except TargetMismatchError as error:
+            detail = error.operation_error
+            return sw._result(
+                False,
+                str(error),
+                SwErrors.swInvalidInput,
+                {"code": detail.code, "retryable": detail.retryable},
+            )
     result = entry["handler"](sw, **arguments)
     if result is None:
         raise ValueError(f"Tool returned no result: {name}")
+    if (
+        before is not None
+        and operation_class is OperationClass.MUTATE
+        and result.get("success")
+        and hasattr(sw, "mark_active_document_mutated")
+    ):
+        sw.mark_active_document_mutated(before)
     return result

@@ -5,6 +5,7 @@ import win32com.client
 
 from ..comutil import com
 from ..constants import SwErrors
+from ..core.policy import OperationClass
 from ..registry import tool
 
 
@@ -42,6 +43,7 @@ def _get_planar_face_by_index(doc, face_index: int):
         "length_unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
                         "default": "mm"},
     }, "required": ["face_index1", "face_index2"]},
+    operation_class=OperationClass.READ,
 )
 def measure_distance(sw, face_index1: int, face_index2: int,
                      length_unit: str = "mm") -> dict:
@@ -118,6 +120,7 @@ def measure_distance(sw, face_index1: int, face_index2: int,
         "length_unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
         "visible_only": {"type": "boolean", "default": True},
     }, "required": []},
+    operation_class=OperationClass.READ,
 )
 def get_body_bounding_box(sw, length_unit: str = "mm", visible_only: bool = True) -> dict:
     """Return approximate boxes; callers must not treat them as tolerance measurements."""
@@ -173,6 +176,7 @@ def get_body_bounding_box(sw, length_unit: str = "mm", visible_only: bool = True
     schema={"type": "object", "properties": {
         "length_unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
     }, "required": []},
+    operation_class=OperationClass.READ,
 )
 def get_mass_properties(sw, length_unit: str = "mm") -> dict:
     """Return SI source values plus explicit display-unit conversions."""

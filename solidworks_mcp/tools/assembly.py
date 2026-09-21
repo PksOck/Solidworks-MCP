@@ -10,6 +10,7 @@ import win32com.client
 
 from ..comutil import com
 from ..constants import SwDocumentTypes, SwErrors, SwMateTypes
+from ..core.policy import OperationClass
 from ..registry import tool
 from .guard import require_output_write
 
@@ -148,6 +149,7 @@ def _select_component_face(asm, component, face_index, append, mark):
         },
         "required": ["filepath"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict:
     """Insert a component into the active assembly"""
@@ -182,6 +184,7 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
     name="list_components",
     description="List the components of the active assembly: name, path, fixed/floating state.",
     schema={"type": "object", "properties": {}, "required": []},
+    operation_class=OperationClass.READ,
 )
 def list_components(sw) -> dict:
     """List all component instances of the active assembly recursively."""
@@ -266,6 +269,7 @@ def list_components(sw) -> dict:
         },
         "required": ["component_name"]
     },
+    operation_class=OperationClass.READ,
 )
 def list_component_faces(sw, component_name: str) -> dict:
     """List planar/cylindrical faces of one assembly component"""
@@ -355,6 +359,7 @@ def _add_mate(sw, asm, component1, face_index1, component2, face_index2,
         },
         "required": ["component1", "face_index1", "component2", "face_index2"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def mate_coincident(sw, component1: str, face_index1: int, component2: str,
                      face_index2: int, flip: bool = False) -> dict:
@@ -384,6 +389,7 @@ def mate_coincident(sw, component1: str, face_index1: int, component2: str,
         },
         "required": ["component1", "face_index1", "component2", "face_index2"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def mate_concentric(sw, component1: str, face_index1: int, component2: str,
                      face_index2: int, flip: bool = False) -> dict:
@@ -413,6 +419,7 @@ def mate_concentric(sw, component1: str, face_index1: int, component2: str,
         },
         "required": ["component1", "face_index1", "component2", "face_index2", "distance_mm"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def mate_distance(sw, component1: str, face_index1: int, component2: str,
                    face_index2: int, distance_mm: float, flip: bool = False) -> dict:
@@ -429,6 +436,7 @@ def mate_distance(sw, component1: str, face_index1: int, component2: str,
     name="list_mates",
     description="List the mates already present in the active assembly's Mates feature group.",
     schema={"type": "object", "properties": {}, "required": []},
+    operation_class=OperationClass.READ,
 )
 def list_mates(sw) -> dict:
     """List mates in the active assembly"""
@@ -471,6 +479,7 @@ def list_mates(sw) -> dict:
         },
         "required": ["destination_folder"]
     },
+    operation_class=OperationClass.EXPORT,
 )
 def pack_and_go(sw, destination_folder: str, include_drawings: bool = True) -> dict:
     """Pack and Go the active assembly to a destination folder"""

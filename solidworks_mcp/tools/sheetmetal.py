@@ -10,6 +10,7 @@ import win32com.client
 
 from ..comutil import com
 from ..constants import SwErrors
+from ..core.policy import OperationClass
 from ..registry import tool
 from .guard import require_output_write, require_stateful_document_access
 
@@ -46,6 +47,7 @@ def _find_flat_pattern_feature(doc):
         "properties": {},
         "required": []
     },
+    operation_class=OperationClass.READ,
 )
 def get_sheet_metal_info(sw) -> dict:
     """Read sheet metal parameters from the active part."""
@@ -96,6 +98,7 @@ def get_sheet_metal_info(sw) -> dict:
         },
         "required": ["flatten"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def flatten_sheet_metal(sw, flatten: bool) -> dict:
     """Toggle the Flat-Pattern feature between flattened and folded state."""
@@ -144,6 +147,7 @@ def flatten_sheet_metal(sw, flatten: bool) -> dict:
         "properties": {},
         "required": []
     },
+    operation_class=OperationClass.STATEFUL_READ,
 )
 def get_flat_pattern_info(sw) -> dict:
     """Read flat pattern bounding-box dimensions, restoring the folded state after."""
@@ -212,6 +216,7 @@ def get_flat_pattern_info(sw) -> dict:
         },
         "required": ["output_path"]
     },
+    operation_class=OperationClass.EXPORT,
 )
 def export_flat_pattern(sw, output_path: str) -> dict:
     """Export the flat pattern of the active sheet metal part."""

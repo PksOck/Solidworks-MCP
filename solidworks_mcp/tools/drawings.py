@@ -7,6 +7,7 @@ import os
 
 from ..comutil import com
 from ..constants import SwErrors
+from ..core.policy import OperationClass
 from ..registry import tool
 
 logger = logging.getLogger("SolidWorksMCP")
@@ -21,6 +22,7 @@ _DEFAULT_ANGLE_TEMPLATE = os.path.join(
     name="list_drawing_views",
     description="List the views on the active drawing sheet, by name. Read-only.",
     schema={"type": "object", "properties": {}, "required": []},
+    operation_class=OperationClass.READ,
 )
 def list_drawing_views(sw) -> dict:
     """Enumerate views on the active drawing document."""
@@ -58,6 +60,7 @@ def list_drawing_views(sw) -> dict:
         },
         "required": ["model_name"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def add_standard_3_view(sw, model_name: str) -> dict:
     """Insert front/top/right views of an open model onto the active drawing."""
@@ -110,6 +113,7 @@ def add_standard_3_view(sw, model_name: str) -> dict:
         },
         "required": ["view_name"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def insert_cut_list_table(sw, view_name: str, x: float = 0.05, y: float = 0.05,
                            template_path: str = "") -> dict:

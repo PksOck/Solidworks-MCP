@@ -8,6 +8,7 @@ import pythoncom
 import win32com.client
 
 from ..comutil import com
+from ..core.policy import OperationClass
 from ..registry import tool
 
 logger = logging.getLogger("SolidWorksMCP")
@@ -58,6 +59,7 @@ def _parse_int(text):
         },
         "required": []
     },
+    operation_class=OperationClass.STATEFUL_READ,
 )
 def get_cut_list(sw, include_properties: bool = True) -> dict:
     """Walk the active part's feature tree and read every visible cut-list folder."""

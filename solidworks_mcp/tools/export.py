@@ -11,6 +11,7 @@ import win32com.client
 
 from ..comutil import com
 from ..constants import SwErrors
+from ..core.policy import OperationClass
 from ..registry import tool
 from .guard import require_output_write
 
@@ -38,6 +39,7 @@ MAX_LOOP_ITER = 500
         },
         "required": []
     },
+    operation_class=OperationClass.READ,
 )
 def list_planar_faces(sw, min_area_mm2: float = 0.0) -> dict:
     """List planar faces of the active part"""
@@ -205,6 +207,7 @@ def _face_plane_axes(face):
         },
         "required": ["face_index", "output_path"]
     },
+    operation_class=OperationClass.EXPORT,
 )
 def export_face_to_dxf(sw, face_index: int, output_path: str) -> dict:
     """Export a single planar face of the active part to DXF/DWG."""

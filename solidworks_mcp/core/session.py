@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ntpath
 from typing import Any, Mapping
+from collections.abc import Callable
+from uuid import uuid4
 
 from .contracts import DocumentRef, OperationError, OperationResult, OperationStatus
 
@@ -17,7 +20,7 @@ class TargetMismatchError(RuntimeError):
 @dataclass(frozen=True)
 class SessionTarget:
     document_id: str
-    canonical_path: str
+    canonical_path: str | None
     document_type: str
     configuration: str | None
     revision_token: str | None
@@ -40,6 +43,72 @@ class SessionState:
     def bind(self, document: DocumentRef) -> SessionTarget:
         self.target = SessionTarget.from_document(document)
         return self.target
+
+
+class DocumentSession:
+    """Own serializable document identities and MCP-side revision tokens.
+
+    No COM object is retained here.  The automation adapter takes a fresh
+    snapshot on the owning COM thread and passes only strings and integers.
+    """
+
+    def __init__(self, id_factory: Callable[[], str] | None = None) -> None:
+        self._id_factory = id_factory or (lambda: str(uuid4()))
+        self._document_ids: dict[tuple[str, ...], str] = {}
+        self._revisions: dict[str, int] = {}
+        self.state = SessionState()
+
+    @staticmethod
+    def _key(*, title: str, path: str | None, document_type: str) -> tuple[str, ...]:
+        if path:
+            canonical = ntpath.normcase(ntpath.normpath(path))
+            return ("path", canonical)
+        return ("unsaved", document_type.casefold(), title.casefold())
+
+    def capture(
+        self,
+        *,
+        title: str,
+        path: str | None,
+        document_type: str,
+        configuration: str | None,
+    ) -> DocumentRef:
+        key = self._key(title=title, path=path, document_type=document_type)
+        document_id = self._document_ids.get(key)
+        if document_id is None:
+            document_id = self._id_factory()
+            self._document_ids[key] = document_id
+            self._revisions[document_id] = 0
+        return DocumentRef(
+            document_id=document_id,
+            path=ntpath.normpath(path) if path else None,
+            document_type=document_type.casefold(),
+            configuration=configuration,
+            revision_token=f"mcp:{self._revisions[document_id]}",
+        )
+
+    def bind(self, **snapshot: Any) -> DocumentRef:
+        document = self.capture(**snapshot)
+        self.state.bind(document)
+        return document
+
+    def require_bound(self, actual: DocumentRef) -> None:
+        if self.state.target is None:
+            raise TargetMismatchError("WRONG_DOCUMENT", "No document is bound to this session.")
+        require_target(self.state.target, actual)
+
+    def mark_mutated(self, before: DocumentRef) -> DocumentRef:
+        self.require_bound(before)
+        self._revisions[before.document_id] += 1
+        after = DocumentRef(
+            document_id=before.document_id,
+            path=before.path,
+            document_type=before.document_type,
+            configuration=before.configuration,
+            revision_token=f"mcp:{self._revisions[before.document_id]}",
+        )
+        self.state.bind(after)
+        return after
 
 
 def require_target(target: SessionTarget, actual: DocumentRef) -> None:

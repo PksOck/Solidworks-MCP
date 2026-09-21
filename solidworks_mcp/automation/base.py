@@ -17,6 +17,8 @@ import pythoncom
 
 from ..constants import SwErrors, SwPlanes, SwDocumentTypes, SwViews
 from ..config import get_config
+from ..comutil import com
+from ..core.session import DocumentSession
 from ..utils import UnitConverter, find_solidworks, find_template
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class SolidWorksAutomation:
         self._units = UnitConverter(self._config.default_unit)
         self._sw_exe_path = None
         self._path_policy = self._config.create_path_policy()
+        self._document_session = DocumentSession()
         
         logger.info("SolidWorksAutomation initialized")
 
@@ -273,3 +276,52 @@ class SolidWorksAutomation:
             return path
         except:
             return ""
+
+    def _capture_document_ref(self, doc):
+        """Capture active-document metadata without retaining the COM object."""
+        type_names = {1: "part", 2: "assembly", 3: "drawing"}
+        document_type = type_names.get(com(doc, "GetType"), "unknown")
+        configuration = None
+        try:
+            manager = com(doc, "ConfigurationManager")
+            active = com(manager, "ActiveConfiguration")
+            configuration = com(active, "Name") if active is not None else None
+        except Exception:
+            # Drawings and partially loaded documents may not expose a configuration.
+            configuration = None
+        return self._document_session.capture(
+            title=self._get_doc_title(doc),
+            path=self._get_doc_path(doc) or None,
+            document_type=document_type,
+            configuration=configuration,
+        )
+
+    def capture_active_document_ref(self):
+        """Return a serializable reference for the current ActiveDoc."""
+        doc, error = self.get_active_doc()
+        if error:
+            return None, error
+        return self._capture_document_ref(doc), None
+
+    def bind_active_document(self):
+        """Bind the current ActiveDoc as the explicit mutation target."""
+        document, error = self.capture_active_document_ref()
+        if error:
+            raise RuntimeError(error["message"])
+        self._document_session.state.bind(document)
+        return document
+
+    def has_bound_document(self) -> bool:
+        return self._document_session.state.target is not None
+
+    def require_bound_active_document(self):
+        """Reject an ActiveDoc, configuration, or revision switch before COM mutation."""
+        document, error = self.capture_active_document_ref()
+        if error:
+            raise RuntimeError(error["message"])
+        self._document_session.require_bound(document)
+        return document
+
+    def mark_active_document_mutated(self, before):
+        """Advance the MCP revision after a successful document mutation."""
+        return self._document_session.mark_mutated(before)

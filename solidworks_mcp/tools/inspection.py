@@ -2,6 +2,7 @@
 
 from ..comutil import com
 from ..constants import SwErrors, SwPlanes
+from ..core.policy import OperationClass
 from ..registry import tool
 
 
@@ -9,6 +10,7 @@ from ..registry import tool
     name="list_planes",
     description="List standard and reference planes in the active document without changing selection.",
     schema={"type": "object", "properties": {}, "required": []},
+    operation_class=OperationClass.READ,
 )
 def list_planes(sw) -> dict:
     """Return usable standard plane names and explicit RefPlane features."""

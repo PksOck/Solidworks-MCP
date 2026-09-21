@@ -10,6 +10,7 @@ import win32com.client
 
 from ..comutil import com
 from ..constants import SwErrors
+from ..core.policy import OperationClass
 from ..registry import tool
 
 logger = logging.getLogger("SolidWorksMCP")
@@ -34,6 +35,7 @@ SW_FILE_LOCATIONS_WELDMENT_PROFILES = 29
         },
         "required": []
     },
+    operation_class=OperationClass.READ,
 )
 def list_weldment_profiles(sw, filter: str = "") -> dict:
     """List .sldlfp profile files under the configured weldment profiles library."""
@@ -123,6 +125,7 @@ def _has_weldment_feature(doc) -> bool:
         },
         "required": ["sketch_name", "profile_path"]
     },
+    operation_class=OperationClass.MUTATE,
 )
 def create_structural_member(sw, sketch_name: str, profile_path: str,
                               connected_segments_option: int = 1,

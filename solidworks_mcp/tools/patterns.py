@@ -4,6 +4,7 @@ import math
 
 from ..comutil import com
 from ..constants import SwErrors
+from ..core.policy import OperationClass
 from ..registry import tool
 
 
@@ -47,6 +48,7 @@ def _select_pattern_inputs(sw, doc, seed_name, direction_name):
         "flip_direction": {"type": "boolean", "default": False},
         "geometry_pattern": {"type": "boolean", "default": True},
     }, "required": ["seed_feature", "axis_feature", "instances"]},
+    operation_class=OperationClass.MUTATE,
 )
 def circular_pattern(sw, seed_feature: str, axis_feature: str, instances: int,
                      total_angle_deg: float = 360, flip_direction: bool = False,
@@ -83,6 +85,7 @@ def circular_pattern(sw, seed_feature: str, axis_feature: str, instances: int,
         "flip_direction": {"type": "boolean", "default": False},
         "geometry_pattern": {"type": "boolean", "default": True},
     }, "required": ["seed_feature", "direction_feature", "instances", "spacing"]},
+    operation_class=OperationClass.MUTATE,
 )
 def linear_pattern(sw, seed_feature: str, direction_feature: str, instances: int,
                    spacing: float, unit: str = "mm", flip_direction: bool = False,

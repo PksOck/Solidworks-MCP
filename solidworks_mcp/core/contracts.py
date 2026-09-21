@@ -42,7 +42,7 @@ def validate_quantity(value: float, unit: str, allowed_units: Iterable[str]) -> 
 @dataclass(frozen=True)
 class DocumentRef:
     document_id: str
-    path: str
+    path: str | None
     document_type: str
     configuration: str | None = None
     revision_token: str | None = None
