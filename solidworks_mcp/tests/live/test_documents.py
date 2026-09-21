@@ -9,7 +9,8 @@ from solidworks_mcp.constants import SwDocumentTypes
 from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
-from solidworks_mcp.tools.export import export_step, export_stl
+from solidworks_mcp.tools.advanced_features import shell_feature
+from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
 from solidworks_mcp.tools.reference_geometry import create_reference_plane
@@ -233,6 +234,29 @@ class LiveDocumentTargetTests(unittest.TestCase):
             len(after["data"]["planes"]),
         )
         self.assertEqual("reference", after["data"]["planes"][-1]["kind"])
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_shell_scratch_extrusion_removes_one_planar_face_without_saving(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-20, -10, 20, 10, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(20, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        faces = list_planar_faces(self.automation)
+        self.assertTrue(faces["success"], faces["message"])
+        self.assertTrue(faces["data"]["faces"])
+        removable_face = faces["data"]["faces"][0]["index"]
+
+        result = shell_feature(
+            self.automation, 2, "mm", remove_face_indices=[removable_face]
+        )
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertIn("Shell", self._top_level_feature_types())
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
