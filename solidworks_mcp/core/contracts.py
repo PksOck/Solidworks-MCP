@@ -25,18 +25,27 @@ class Quantity:
     unit: str
 
 
-def validate_quantity(value: float, unit: str, allowed_units: Iterable[str]) -> Quantity:
+def validate_quantity(
+    value: float,
+    unit: str,
+    allowed_units: Iterable[str],
+    *,
+    minimum: float | None = None,
+) -> Quantity:
     """Validate a finite quantity against the units supported by one operation."""
 
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise QuantityValidationError("Quantity value must be a finite number.")
     if not math.isfinite(float(value)):
         raise QuantityValidationError("Quantity value must be finite.")
+    numeric_value = float(value)
+    if minimum is not None and numeric_value < minimum:
+        raise QuantityValidationError(f"Quantity value must be at least {minimum}.")
     supported_units = set(allowed_units)
     if unit not in supported_units:
         choices = ", ".join(sorted(supported_units))
         raise QuantityValidationError(f"Unsupported unit '{unit}'. Supported units: {choices}.")
-    return Quantity(value=float(value), unit=unit)
+    return Quantity(value=numeric_value, unit=unit)
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ import time
 import logging
 import datetime
 import traceback
+import threading
 from typing import Optional, Dict, Any, Tuple
 
 # COM imports
@@ -22,6 +23,10 @@ from ..core.session import DocumentSession
 from ..utils import UnitConverter, find_solidworks, find_template
 
 logger = logging.getLogger(__name__)
+
+
+class ComThreadOwnershipError(RuntimeError):
+    """Raised before a SolidWorks COM proxy is touched from another thread."""
 
 
 class SolidWorksAutomation:
@@ -41,6 +46,8 @@ class SolidWorksAutomation:
         self._sw_exe_path = None
         self._path_policy = self._config.create_path_policy()
         self._document_session = DocumentSession()
+        self._com_owner_thread_id = None
+        self._com_initialized = False
         
         logger.info("SolidWorksAutomation initialized")
 
@@ -62,6 +69,7 @@ class SolidWorksAutomation:
         """Check if connected to SolidWorks"""
         if not self._connected or self._sw_app is None:
             return False
+        self._require_com_owner()
         
         try:
             # Test connection by accessing a property
@@ -80,7 +88,17 @@ class SolidWorksAutomation:
     @property
     def app(self):
         """Get SolidWorks application object"""
+        if self._sw_app is not None:
+            self._require_com_owner()
         return self._sw_app
+
+    def _require_com_owner(self) -> None:
+        owner = getattr(self, "_com_owner_thread_id", None)
+        current = threading.get_ident()
+        if owner is not None and owner != current:
+            raise ComThreadOwnershipError(
+                f"SolidWorks COM session belongs to thread {owner}; current thread is {current}."
+            )
     
     # ========================================================================
     # Result Helper
@@ -134,10 +152,16 @@ class SolidWorksAutomation:
             lambda: win32com.client.GetActiveObject("SldWorks.Application"),
         ]
         
+        self._require_com_owner()
+        initialized_here = not self._com_initialized
+        if initialized_here:
+            pythoncom.CoInitialize()
+            self._com_initialized = True
+            self._com_owner_thread_id = threading.get_ident()
+
         for i, method in enumerate(methods):
             try:
                 logger.debug(f"Trying connection method {i+1}...")
-                pythoncom.CoInitialize()
                 self._sw_app = method()
                 
                 if self._sw_app is not None:
@@ -154,6 +178,10 @@ class SolidWorksAutomation:
                 logger.debug(f"Method {i+1} failed: {e}")
                 continue
         
+        if initialized_here:
+            pythoncom.CoUninitialize()
+            self._com_initialized = False
+            self._com_owner_thread_id = None
         return False
     
     def connect(self) -> Dict:
@@ -226,8 +254,13 @@ class SolidWorksAutomation:
         Returns:
             Result dictionary
         """
+        self._require_com_owner()
         self._sw_app = None
         self._connected = False
+        if self._com_initialized:
+            pythoncom.CoUninitialize()
+            self._com_initialized = False
+            self._com_owner_thread_id = None
         logger.info("Disconnected from SolidWorks")
         return self._result(True, "Disconnected from SolidWorks")
     
@@ -244,6 +277,7 @@ class SolidWorksAutomation:
             - If successful: (document, None)
             - If failed: (None, error_dict)
         """
+        self._require_com_owner()
         if not self.is_connected:
             result = self.connect()
             if not result["success"]:

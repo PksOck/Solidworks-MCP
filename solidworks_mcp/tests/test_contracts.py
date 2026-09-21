@@ -26,6 +26,10 @@ class QuantityValidationTests(unittest.TestCase):
         with self.assertRaises(QuantityValidationError):
             validate_quantity(10, "m", {"mm", "inch"})
 
+    def test_rejects_negative_length_when_minimum_is_zero(self):
+        with self.assertRaises(QuantityValidationError):
+            validate_quantity(-0.1, "mm", {"mm"}, minimum=0)
+
 
 class OperationResultTests(unittest.TestCase):
     def test_serialization_preserves_legacy_result_fields(self):

@@ -23,6 +23,7 @@ class LiveDocumentTargetTests(unittest.TestCase):
                 self.automation.app.CloseDoc(title)
             except Exception:
                 pass
+        self.automation.disconnect()
 
     def _new_part(self):
         result = self.automation.create_new_part()
@@ -47,6 +48,14 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertNotEqual(first_title, second_title)
         self.assertIsNone(first.path)
         self.assertIsNone(second.path)
+
+    def test_two_connections_remain_on_the_same_com_owner_thread(self):
+        owner = self.automation._com_owner_thread_id
+
+        result = self.automation.connect()
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(owner, self.automation._com_owner_thread_id)
 
 
 if __name__ == "__main__":
