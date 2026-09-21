@@ -131,6 +131,23 @@ class InspectionGraphTests(unittest.TestCase):
         self.assertFalse(snapshot["coverage"]["complete"])
         self.assertIn("MissingView", snapshot["coverage"]["unresolved"][0])
 
+    def test_mates_section_is_exposed_as_sourced_observation(self):
+        mate_group = type("MateGroup", (), {
+            "GetTypeName2": "MateGroup",
+            "GetFirstSubFeature": None,
+            "GetNextFeature": None,
+        })()
+        assembly = Assembly(())
+        assembly.FirstFeature = mate_group
+        automation = Automation(assembly)
+
+        result = inspect_document(automation, sections=["mates"])
+
+        snapshot = result["data"]["snapshot"]
+        self.assertEqual("mates", snapshot["observations"][0]["section"])
+        self.assertEqual("SolidWorks IMate2", snapshot["observations"][0]["source"])
+        self.assertEqual([], snapshot["observations"][0]["value"])
+
 
 if __name__ == "__main__":
     unittest.main()

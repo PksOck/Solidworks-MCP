@@ -462,10 +462,133 @@ def mate_distance(sw, component1: str, face_index1: int, component2: str,
     operation_class=OperationClass.READ,
 )
 def list_mates(sw) -> dict:
-    """List mates in the active assembly"""
+    """List mate definitions, entities, values, and rebuild status."""
     asm, err = _require_assembly(sw)
     if err:
         return err
+
+    unresolved = []
+
+    def optional(obj, member, context, *args):
+        try:
+            return com(obj, member, *args)
+        except Exception as error:
+            unresolved.append(f"{context}: {member} unavailable ({error})")
+            return None
+
+    def mate_type_name(value):
+        try:
+            return SwMateTypes(value).name.removeprefix("swMate").lower()
+        except (ValueError, TypeError):
+            return "unknown"
+
+    def solver_status(feature, context, definition_available):
+        warning = win32com.client.VARIANT(
+            pythoncom.VT_BYREF | pythoncom.VT_BOOL, False
+        )
+        try:
+            error_code = com(feature, "GetErrorCode2", warning)
+            is_warning = bool(warning.value) if error_code else False
+        except Exception as error:
+            unresolved.append(f"{context}: GetErrorCode2 unavailable ({error})")
+            error_code = None
+            is_warning = None
+        if not definition_available:
+            state = "unavailable"
+        elif error_code is None:
+            state = "unknown"
+        elif error_code == 0:
+            state = "solved"
+        elif is_warning:
+            state = "warning"
+        else:
+            state = "error"
+        return {"state": state, "error_code": error_code, "is_warning": is_warning}
+
+    def inspect_entity(entity, context):
+        component = optional(entity, "ReferenceComponent", context)
+        component_name = (
+            optional(component, "Name2", context) if component is not None else None
+        )
+        params = optional(entity, "EntityParams", context)
+        values = list(params) if params is not None else []
+        if len(values) < 8:
+            unresolved.append(
+                f"{context}: EntityParams returned {len(values)} of 8 values"
+            )
+            values.extend([None] * (8 - len(values)))
+        return {
+            "component": component_name,
+            "reference_type": optional(entity, "ReferenceType2", context),
+            "point_m": values[0:3],
+            "vector": values[3:6],
+            "radius_1_m": values[6],
+            "radius_2_m": values[7],
+        }
+
+    def inspect_mate(feature):
+        name = optional(feature, "Name", "mate") or "<unknown>"
+        context = f"mate {name}"
+        definition = optional(feature, "GetSpecificFeature2", context)
+        feature_type = optional(feature, "GetTypeName2", context) or "<unknown>"
+        mate_type = optional(definition, "Type", context) if definition is not None else None
+        entities = []
+        value = None
+        if definition is not None:
+            count = optional(definition, "GetMateEntityCount", context)
+            if isinstance(count, int):
+                for index in range(count):
+                    entity = optional(definition, "MateEntity", f"{context}/entity[{index}]", index)
+                    if entity is not None:
+                        entities.append(inspect_entity(entity, f"{context}/entity[{index}]"))
+            if mate_type in {
+                int(SwMateTypes.swMateDISTANCE), int(SwMateTypes.swMateANGLE)
+            }:
+                display = optional(definition, "DisplayDimension2", context, 0)
+                dimension = (
+                    optional(display, "GetDimension2", context, 0)
+                    if display is not None else None
+                )
+                system_value = (
+                    optional(dimension, "SystemValue", context)
+                    if dimension is not None else None
+                )
+                value = {
+                    "system_value": system_value,
+                    "unit": (
+                        "m" if mate_type == int(SwMateTypes.swMateDISTANCE) else "rad"
+                    ),
+                }
+        else:
+            unresolved.append(f"{context}: mate definition unavailable")
+
+        is_flippable_type = mate_type in {
+            int(SwMateTypes.swMateDISTANCE), int(SwMateTypes.swMateANGLE)
+        }
+
+        return {
+            "name": name,
+            "feature_id": optional(feature, "GetID", context),
+            "feature_type": feature_type,
+            "mate_type": mate_type,
+            "mate_type_name": mate_type_name(mate_type),
+            "alignment": (
+                optional(definition, "Alignment", context)
+                if definition is not None else None
+            ),
+            "can_flip": (
+                optional(definition, "CanBeFlipped", context)
+                if definition is not None and is_flippable_type else None
+            ),
+            "flipped": (
+                optional(definition, "Flipped", context)
+                if definition is not None and is_flippable_type else None
+            ),
+            "suppressed": optional(feature, "IsSuppressed", context),
+            "value": value,
+            "entities": entities,
+            "solver_status": solver_status(feature, context, definition is not None),
+        }
 
     mate_group = None
     feat = com(asm, "FirstFeature")
@@ -479,10 +602,19 @@ def list_mates(sw) -> dict:
     if mate_group is not None:
         sub = com(mate_group, "GetFirstSubFeature")
         while sub is not None:
-            mates.append({"name": com(sub, "Name"), "type": com(sub, "GetTypeName2")})
+            mates.append(inspect_mate(sub))
             sub = com(sub, "GetNextSubFeature")
 
-    return sw._result(True, f"Found {len(mates)} mates.", data={"mates": mates})
+    return sw._result(True, f"Found {len(mates)} mates.", data={
+        "mates": mates,
+        "coverage": {
+            "complete": not unresolved,
+            "visited_count": len(mates),
+            "unresolved": unresolved,
+            "truncated": False,
+            "next_cursor": None,
+        },
+    })
 
 
 @tool(

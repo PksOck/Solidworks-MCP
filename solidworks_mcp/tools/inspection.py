@@ -10,7 +10,7 @@ from ..core.policy import OperationClass
 from ..inspection.snapshots import SnapshotCursorError, SnapshotStore
 from ..inspection.documents import inspect_dependencies, inspect_feature_tree
 from ..registry import tool
-from .assembly import list_components
+from .assembly import list_components, list_mates
 
 
 _INSPECTION_SECTIONS = {
@@ -160,6 +160,40 @@ def inspect_document(
                     "state": dependency["state"],
                     "source_method": dependency["source"],
                 })
+
+        if "mates" in requested:
+            if target.document_type != "assembly":
+                unresolved.append("mates: active document is not an assembly")
+                complete = False
+                observations.append({
+                    "section": "mates",
+                    "source": "SolidWorks IMate2",
+                    "document_id": target.document_id,
+                    "configuration": target.configuration,
+                    "revision_token": target.revision_token,
+                    "state": "unavailable",
+                    "value": [],
+                })
+            else:
+                mate_result = list_mates(sw)
+                if not mate_result["success"]:
+                    return mate_result
+                mate_data = mate_result["data"]
+                mate_coverage = mate_data["coverage"]
+                complete = complete and bool(mate_coverage["complete"])
+                unresolved.extend(mate_coverage["unresolved"])
+                observations.append({
+                    "section": "mates",
+                    "source": "SolidWorks IMate2",
+                    "document_id": target.document_id,
+                    "configuration": target.configuration,
+                    "revision_token": target.revision_token,
+                    "state": (
+                        "known" if mate_coverage["complete"] else "unavailable"
+                    ),
+                    "value": mate_data["mates"],
+                })
+
         if target.document_type == "assembly" and ({"assembly", "dependencies"} & set(requested)):
             component_result = list_components(sw, depth=depth)
             if not component_result["success"]:

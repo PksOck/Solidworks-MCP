@@ -2,7 +2,10 @@ import os
 import unittest
 
 from solidworks_mcp.automation import SolidWorksAutomation
+from solidworks_mcp.comutil import com
+from solidworks_mcp.constants import SwDocumentTypes
 from solidworks_mcp.core.session import TargetMismatchError
+from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
 
 
@@ -104,6 +107,34 @@ class LiveDocumentTargetTests(unittest.TestCase):
             "fallback",
             snapshot["observations"][0]["value"]["evidence"][0].lower(),
         )
+
+
+@unittest.skipUnless(
+    os.environ.get("SW_MCP_LIVE_TESTS") == "1",
+    "Set SW_MCP_LIVE_TESTS=1 to run SolidWorks COM tests.",
+)
+class LiveAssemblyInspectionTests(unittest.TestCase):
+    def setUp(self):
+        self.automation = SolidWorksAutomation()
+        result = self.automation.connect()
+        if not result["success"]:
+            self.skipTest(result["message"])
+
+    def tearDown(self):
+        self.automation.disconnect()
+
+    def test_active_user_assembly_mates_are_read_without_saving(self):
+        document, error = self.automation.get_active_doc()
+        if error or com(document, "GetType") != SwDocumentTypes.swDocASSEMBLY:
+            self.skipTest("No active assembly is available for read-only mate inspection.")
+
+        result = list_mates(self.automation)
+
+        self.assertTrue(result["success"], result["message"])
+        for mate in result["data"]["mates"]:
+            self.assertIn("entities", mate)
+            self.assertIn("solver_status", mate)
+            self.assertIn("feature_id", mate)
 
 
 if __name__ == "__main__":
