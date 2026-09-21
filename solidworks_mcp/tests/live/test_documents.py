@@ -1,4 +1,3 @@
-import math
 import os
 import unittest
 from pathlib import Path
@@ -396,22 +395,7 @@ class LiveDocumentTargetTests(unittest.TestCase):
         document, error = self.automation.get_active_doc()
         self.assertIsNone(error)
 
-        # SolidWorks only creates the Flat-Pattern feature once the body has a
-        # bend, so the test induces one. The edge-flange API returns None while
-        # still registering the bend, which is why the Flat-Pattern feature is
-        # the thing observed here.
-        body = (com(document, "GetBodies2", 0, True) or [None])[0]
-        edge = next(edge for edge in com(body, "GetEdges") or []
-                    if com(com(edge, "GetCurve"), "IsLine"))
-        empty = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
-        edge_array = win32com.client.VARIANT(
-            pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [edge])
-        sketch_array = win32com.client.VARIANT(
-            pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [])
-        com(com(document, "FeatureManager"), "InsertSheetMetalEdgeFlange2",
-            edge_array, sketch_array, 0, math.radians(90.0), 0.001, 0, 0.02,
-            0, 0.0, 0.0, 0.0, 0, empty)
-        com(document, "EditRebuild3")
+        # Sheet metal always gets a Flat-Pattern feature, even with no bends.
         self.assertIsNotNone(self._find_feature_type(document, "FlatPattern"),
                              "No Flat-Pattern feature was created.")
 
