@@ -176,17 +176,6 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="save_document",
-            description="Save the active document.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "Path to save (optional for Save As)"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
             name="close_document",
             description="Close the active document.",
             inputSchema={
@@ -640,9 +629,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         
         elif name == "open_document":
             result = sw_automation.open_document(arguments.get("filepath", ""))
-        
-        elif name == "save_document":
-            result = sw_automation.save_document(arguments.get("filepath"))
         
         elif name == "close_document":
             result = sw_automation.close_document(arguments.get("save", False))

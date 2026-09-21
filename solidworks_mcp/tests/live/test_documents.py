@@ -15,6 +15,9 @@ from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.saving import save_document
+from solidworks_mcp.tools.sheetmetal import (
+    create_sheet_metal_base_flange, export_flat_pattern, get_sheet_metal_info,
+)
 from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
 from solidworks_mcp.tools.weldments import create_structural_member, list_weldment_profiles
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
@@ -364,6 +367,44 @@ class LiveDocumentTargetTests(unittest.TestCase):
         extrusion = self.automation.extrude_sketch(10, False, "mm")
         self.assertTrue(extrusion["success"], extrusion["message"])
         return part_title
+
+    def test_create_sheet_metal_base_flange_and_export_flat_pattern(self):
+        root = Path(self.automation._path_policy.output_roots[0])
+        part_path = root / "saved" / "mcp_live_sheetmetal_part.SLDPRT"
+        dxf_path = root / "saved" / "mcp_live_flat_pattern.dxf"
+
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        self.assertTrue(self.automation.draw_line(0, 0, 100, 0, "mm")["success"])
+
+        result = create_sheet_metal_base_flange(self.automation, 2.0,
+                                               bend_radius_mm=1.0, width_mm=100.0)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("Sheet-Metal1", result["data"]["sheet_metal_feature"])
+
+        info = get_sheet_metal_info(self.automation)
+        self.assertTrue(info["success"], info["message"])
+        self.assertAlmostEqual(2.0, info["data"]["thickness_mm"], places=3)
+        self.assertAlmostEqual(1.0, info["data"]["bend_radius_mm"], places=3)
+
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        self.assertAlmostEqual(20000.0, self._total_volume_mm3(), delta=1.0)
+
+        unsaved = export_flat_pattern(self.automation, str(dxf_path))
+        self.assertFalse(unsaved["success"],
+                         "An unsaved part must not silently fail the export.")
+        self.assertEqual("UNSAVED_DOCUMENT", unsaved["data"]["code"])
+
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.created_titles.append(str(com(document, "GetTitle")))
+
+        exported = export_flat_pattern(self.automation, str(dxf_path))
+        self.assertTrue(exported["success"], exported["message"])
+        self.assertTrue(dxf_path.is_file())
+        self.assertGreater(dxf_path.stat().st_size, 0)
 
     def test_create_structural_member_on_scratch_part_without_saving(self):
         part_title = self._new_part()

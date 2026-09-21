@@ -14,7 +14,20 @@ import solidworks_mcp.tools as tools_package
 from solidworks_mcp.registry import registered_tools
 
 TOOLS_DIR = Path(tools_package.__file__).parent
+SERVER_PATH = TOOLS_DIR.parent / "server.py"
 IGNORED_MODULES = {"__init__", "guard"}
+
+
+def _inline_tool_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "Tool"):
+            for keyword in node.keywords:
+                if keyword.arg == "name" and isinstance(keyword.value, ast.Constant):
+                    names.add(keyword.value.value)
+    return names
 
 
 def _declares_tools(path: Path) -> bool:
@@ -55,6 +68,18 @@ class ToolModuleImportTests(unittest.TestCase):
         self.assertIn("extend_entities", names)
         self.assertIn("insert_marked_dimensions", names)
         self.assertIn("auto_balloon", names)
+        self.assertIn("create_sheet_metal_base_flange", names)
+
+    def test_inline_server_tools_do_not_shadow_registry_tools(self):
+        inline = _inline_tool_names(SERVER_PATH)
+        registry = {item.name for item in registered_tools()}
+
+        self.assertEqual(
+            set(), inline & registry,
+            "server.py advertises its own definition of a tool that the "
+            "registry also defines, so the inline dispatcher shadows the "
+            f"registry version: {sorted(inline & registry)}",
+        )
 
 
 if __name__ == "__main__":

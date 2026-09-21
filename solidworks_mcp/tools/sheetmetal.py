@@ -236,12 +236,25 @@ def export_flat_pattern(sw, output_path: str) -> dict:
         return sw._result(False, f"Unsupported output extension: {ext}",
                           SwErrors.swInvalidInput)
 
+    # ExportToDWG2 needs the model path as its base-name argument. An unsaved
+    # scratch part has an empty path, which makes the export fail with no
+    # explanation (live-verified: it succeeds as soon as the part is saved).
+    model_path = com(doc, "GetPathName")
+    if not model_path:
+        return sw._result(
+            False,
+            "SolidWorks needs a saved model path to export a flat pattern. "
+            "Save the part first (save_document) and retry.",
+            SwErrors.swFileSaveError,
+            {"code": "UNSAVED_DOCUMENT"},
+        )
+
     alignment = win32com.client.VARIANT(
         pythoncom.VT_ARRAY | pythoncom.VT_R8, [0.0] * 12)
     views = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
 
     try:
-        ok = com(doc, "ExportToDWG2", output_path, com(doc, "GetPathName"),
+        ok = com(doc, "ExportToDWG2", output_path, model_path,
                  1, True, alignment, False, False, 0, views)
     except Exception as e:
         logger.error(f"ExportToDWG2 failed: {e}")
@@ -254,4 +267,115 @@ def export_flat_pattern(sw, output_path: str) -> dict:
         True,
         f"Exported flat pattern to {output_path}.",
         data={"path": output_path}
+    )
+
+
+def _positive(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+@tool(
+    name="create_sheet_metal_base_flange",
+    description=(
+        "Create the first sheet-metal feature (base flange) from the last "
+        "sketch of the active part, which becomes the Sheet-Metal feature. "
+        "The sketch geometry is the flange outline and 'width_mm' is the "
+        "flange width across the sketch. Modifies the active part."
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "thickness_mm": {"type": "number",
+                             "description": "Sheet thickness in mm."},
+            "bend_radius_mm": {"type": "number",
+                               "description": "Default bend radius in mm. Defaults to the thickness."},
+            "width_mm": {"type": "number", "default": 50.0,
+                         "description": "Flange width in mm, split evenly on both sides of the sketch plane."}
+        },
+        "required": ["thickness_mm"]
+    },
+    operation_class=OperationClass.MUTATE,
+)
+def create_sheet_metal_base_flange(sw, thickness_mm: float,
+                                   bend_radius_mm: float = None,
+                                   width_mm: float = 50.0) -> dict:
+    """Create a base flange from the last sketch using InsertSheetMetalBaseFlange."""
+    if not _positive(thickness_mm):
+        return sw._result(False, "thickness_mm must be a positive number.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if bend_radius_mm is not None and (
+            not isinstance(bend_radius_mm, (int, float))
+            or isinstance(bend_radius_mm, bool) or bend_radius_mm < 0):
+        return sw._result(False, "bend_radius_mm must be a non-negative number.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if not _positive(width_mm):
+        return sw._result(False, "width_mm must be a positive number.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+
+    doc, err = sw.get_active_doc()
+    if err:
+        return err
+    if _find_sheet_metal_feature(doc) is not None:
+        return sw._result(
+            False, "The active part already has a sheet-metal feature.",
+            SwErrors.swFeatureError, {"code": "ALREADY_SHEET_METAL"},
+        )
+
+    selected, sketch_name, message = sw._close_and_select_sketch(doc)
+    if not selected:
+        return sw._result(False, f"Could not select a sketch: {message}",
+                          SwErrors.swSketchError)
+
+    radius_mm = thickness_mm if bend_radius_mm is None else bend_radius_mm
+    half_width_m = width_mm / 2000.0
+    empty_callout = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+
+    # InsertSheetMetalBaseFlange2 returns None in SW 2025 rev 33.1.1 even when
+    # its arguments are the v2 equivalents; the 16-argument
+    # InsertSheetMetalBaseFlange creates the Sheet-Metal feature reliably
+    # (live-verified).
+    try:
+        feature = com(
+            com(doc, "FeatureManager"), "InsertSheetMetalBaseFlange",
+            thickness_mm / 1000.0,   # Thickness (m)
+            False,                    # ThickenDir
+            radius_mm / 1000.0,       # Radius (m)
+            half_width_m,             # ExtrudeDist1 (m)
+            half_width_m,             # ExtrudeDist2 (m)
+            False,                    # FlipExtruDir
+            0,                        # EndCondition1 (blind)
+            0,                        # EndCondition2 (blind)
+            0,                        # DirToUse
+            empty_callout,            # PCBA
+            False,                    # UseDefaultRelief
+            0,                        # ReliefType
+            0.0, 0.0, 0.0,            # ReliefWidth, ReliefDepth, ReliefRatio
+            False,                    # UseReliefRatio
+        )
+    except Exception as create_error:
+        logger.error(f"InsertSheetMetalBaseFlange failed: {create_error}")
+        return sw._result(False, f"Could not create the base flange: {create_error}",
+                          SwErrors.swFeatureError)
+
+    sheet_metal = _find_sheet_metal_feature(doc)
+    if sheet_metal is None:
+        # The API returns a feature even when nothing usable was built, so
+        # success is only reported when the Sheet-Metal feature is observed.
+        return sw._result(
+            False,
+            "No sheet-metal feature appeared after the base flange call.",
+            SwErrors.swFeatureError, {"code": "FEATURE_CREATE_FAILED"},
+        )
+
+    return sw._result(
+        True,
+        f"Created base flange '{com(feature, 'Name')}' from sketch '{sketch_name}'.",
+        data={
+            "feature": com(feature, "Name") if feature is not None else None,
+            "sheet_metal_feature": com(sheet_metal, "Name"),
+            "sketch": sketch_name,
+            "thickness_mm": thickness_mm,
+            "bend_radius_mm": radius_mm,
+            "width_mm": width_mm,
+        },
     )
