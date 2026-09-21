@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
@@ -7,6 +8,7 @@ from solidworks_mcp.constants import SwDocumentTypes
 from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
+from solidworks_mcp.tools.views import capture_view
 
 
 @unittest.skipUnless(
@@ -20,8 +22,11 @@ class LiveDocumentTargetTests(unittest.TestCase):
         if not result["success"]:
             self.skipTest(result["message"])
         self.created_titles = []
+        self.created_artifacts = []
 
     def tearDown(self):
+        for path in self.created_artifacts:
+            Path(path).unlink(missing_ok=True)
         for title in reversed(self.created_titles):
             try:
                 self.automation.app.CloseDoc(title)
@@ -107,6 +112,46 @@ class LiveDocumentTargetTests(unittest.TestCase):
             "fallback",
             snapshot["observations"][0]["value"]["evidence"][0].lower(),
         )
+
+    def test_capture_scratch_part_returns_real_png_without_saving_model(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-20, -10, 20, 10, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(8, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+
+        document, document_error = self.automation.get_active_doc()
+        self.assertIsNone(document_error)
+        feature = com(document, "FirstFeature")
+        sketch_segment_count = None
+        retained = []
+        while feature is not None:
+            retained.append(feature)
+            if com(feature, "GetTypeName2") == "ProfileFeature":
+                sketch = com(feature, "GetSpecificFeature2")
+                sketch_segment_count = len(com(sketch, "GetSketchSegments") or [])
+            feature = com(feature, "GetNextFeature")
+        self.assertEqual(4, sketch_segment_count)
+        com(document, "ClearSelection2", True)
+
+        result = capture_view(
+            self.automation, orientation="isometric", width=640, height=480
+        )
+
+        self.assertTrue(result["success"], result["message"])
+        artifact = result["data"]["artifact"]
+        if os.environ.get("SW_MCP_KEEP_CAPTURE") == "1":
+            print(f"CAPTURE_PATH={artifact['path']}")
+        else:
+            self.created_artifacts.append(artifact["path"])
+        self.assertEqual(b"\x89PNG\r\n\x1a\n", Path(artifact["path"]).read_bytes()[:8])
+        self.assertEqual([640, 480], artifact["pixel_size"])
+        self.assertEqual([], result["data"]["restore_warnings"])
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
 
 
 @unittest.skipUnless(

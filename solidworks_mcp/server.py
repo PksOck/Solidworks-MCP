@@ -19,6 +19,8 @@ Fixes v4.0.0:
 import io
 import sys
 import json
+import base64
+import hashlib
 import logging
 import traceback
 from typing import Dict
@@ -28,7 +30,7 @@ from uuid import uuid4
 # MCP imports
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import ImageContent, Tool, TextContent
 
 # Local imports
 from .automation import SolidWorksAutomation
@@ -499,12 +501,35 @@ def format_result(r: Dict) -> str:
     return "\n".join(lines)
 
 
+def _content_for_result(result: Dict) -> list[TextContent | ImageContent]:
+    """Attach a capture's bytes so MCP clients receive an image, not only a path."""
+    content: list[TextContent | ImageContent] = [
+        TextContent(type="text", text=format_result(result))
+    ]
+    artifact = result.get("data", {}).get("artifact", {})
+    if artifact.get("mime_type") == "image/png" and artifact.get("path"):
+        image_path = Path(artifact["path"])
+        if image_path.is_file():
+            image_bytes = image_path.read_bytes()
+            expected_hash = artifact.get("sha256")
+            actual_hash = hashlib.sha256(image_bytes).hexdigest()
+            if expected_hash and expected_hash != actual_hash:
+                content[0].text += "\n[WARNING] Image bytes were not attached because the artifact hash changed."
+            else:
+                content.append(ImageContent(
+                    type="image",
+                    data=base64.b64encode(image_bytes).decode("ascii"),
+                    mimeType="image/png",
+                ))
+    return content
+
+
 # ============================================================================
 # Tool Handlers
 # ============================================================================
 
 @server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
     """Handle MCP tool calls"""
     try:
         arguments = dict(arguments or {})
@@ -520,7 +545,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "error_name": replay.status.value,
                     "data": dict(replay.data),
                 })
-            return [TextContent(type="text", text=format_result(payload))]
+            return _content_for_result(payload)
         operation_journal.mark_running(operation_id)
         logger.info(f"Tool: {name}, Args: {arguments}")
 
@@ -821,7 +846,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _operation_payloads[operation_id] = result
         
         logger.info(f"Result: success={result['success']}")
-        return [TextContent(type="text", text=format_result(result))]
+        return _content_for_result(result)
         
     except Exception as e:
         logger.error(f"Tool error: {e}\n{traceback.format_exc()}")
