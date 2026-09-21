@@ -13,6 +13,7 @@ from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
+from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
@@ -319,6 +320,74 @@ class LiveDocumentTargetTests(unittest.TestCase):
                 return lengths
             feature = com(feature, "GetNextFeature")
         return None
+
+    def _new_drawing(self, paper_size="A4"):
+        result = self.automation.create_new_drawing(paper_size)
+        self.assertTrue(result["success"], result["message"])
+        title = result["data"]["name"]
+        self.created_titles.append(title)
+        return title
+
+    def _model_view_name(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        retained = []
+        view = com(document, "GetFirstView")
+        while view is not None:
+            retained.append(view)
+            view = com(view, "GetNextView")
+        for view in retained:
+            if com(view, "ReferencedDocument") is not None:
+                return com(view, "GetName2")
+        return None
+
+    def _new_part_with_extrusion(self):
+        part_title = self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-5, -5, 5, 5, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        self._close_sketch()
+        extrusion = self.automation.extrude_sketch(10, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        return part_title
+
+    def test_auto_balloon_scratch_drawing_view_without_saving(self):
+        part_title = self._new_part_with_extrusion()
+        self._new_drawing("A4")
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        created = com(document, "Create3rdAngleViews2", part_title)
+        self.assertTrue(created, "Could not create the standard views.")
+        view_name = self._model_view_name()
+        self.assertIsNotNone(view_name, "No model view was created.")
+
+        result = auto_balloon(self.automation, view_name)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertGreaterEqual(result["data"]["balloons_added"] or 0, 1)
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_insert_marked_dimensions_imports_nothing_when_none_marked_without_saving(self):
+        part_title = self._new_part_with_extrusion()
+        self._new_drawing("A4")
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        created = com(document, "Create3rdAngleViews2", part_title)
+        self.assertTrue(created, "Could not create the standard views.")
+        view_name = self._model_view_name()
+        self.assertIsNotNone(view_name, "No model view was created.")
+
+        result = insert_marked_dimensions(self.automation, view_name)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("NO_MARKED_DIMENSIONS", result["data"]["code"])
+        self.assertEqual(0, result["data"]["dimensions_after"])
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
 
     def test_trim_scratch_sketch_corner_without_saving(self):
         self._new_part()
