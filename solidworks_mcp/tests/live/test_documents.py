@@ -13,6 +13,7 @@ from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
+from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
@@ -301,6 +302,66 @@ class LiveDocumentTargetTests(unittest.TestCase):
             retained.append(body)
             total += com(body, "GetMassProperties", 0.0)[3] * 1e9
         return total
+
+    def _segment_lengths(self, sketch_name):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        retained = []
+        feature = com(document, "FirstFeature")
+        while feature is not None:
+            retained.append(feature)
+            if com(feature, "Name") == sketch_name:
+                sketch = com(feature, "GetSpecificFeature2")
+                lengths = []
+                for segment in com(sketch, "GetSketchSegments") or []:
+                    retained.append(segment)
+                    lengths.append(round(com(segment, "GetLength") * 1000, 3))
+                return lengths
+            feature = com(feature, "GetNextFeature")
+        return None
+
+    def test_trim_scratch_sketch_corner_without_saving(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        first = self.automation.draw_line(0, 0, 50, 0, "mm")
+        self.assertTrue(first["success"], first["message"])
+        second = self.automation.draw_line(25, -20, 25, 20, "mm")
+        self.assertTrue(second["success"], second["message"])
+        self._close_sketch()
+        before = self._segment_lengths("Sketch1")
+        self.assertEqual([50.0, 40.0], before)
+
+        result = trim_entities(
+            self.automation, "Sketch1", ["Line1", "Line2"], "corner"
+        )
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([25.0, 20.0], self._segment_lengths("Sketch1"))
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_extend_scratch_sketch_entity_without_saving(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        first = self.automation.draw_line(0, 0, 20, 0, "mm")
+        self.assertTrue(first["success"], first["message"])
+        second = self.automation.draw_line(40, -10, 40, 10, "mm")
+        self.assertTrue(second["success"], second["message"])
+        self._close_sketch()
+        self.assertEqual([20.0, 20.0], self._segment_lengths("Sketch1"))
+
+        result = extend_entities(
+            self.automation, "Sketch1", ["Line1"], pick=[20, 0, 0]
+        )
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([40.0, 20.0], self._segment_lengths("Sketch1"))
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
 
     def test_sweep_scratch_profile_along_path_without_saving(self):
         self._new_part()
