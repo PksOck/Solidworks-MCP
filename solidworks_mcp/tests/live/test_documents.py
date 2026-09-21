@@ -69,6 +69,24 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertIsNone(snapshot["documents"][0]["path"])
         self.assertEqual("known", snapshot["observations"][0]["state"])
 
+    def test_inspect_scratch_extrusion_preserves_live_feature_tree(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-20, -10, 20, 10, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(8, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+
+        result = inspect_document(
+            self.automation, sections=["features", "parameters"], depth=6
+        )
+
+        self.assertTrue(result["success"], result["message"])
+        observations = result["data"]["snapshot"]["observations"]
+        feature_types = [item["type"] for item in observations[0]["value"]]
+        self.assertIn("Extrusion", feature_types)
+
 
 if __name__ == "__main__":
     unittest.main()

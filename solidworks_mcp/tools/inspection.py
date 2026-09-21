@@ -8,6 +8,7 @@ from ..constants import SwErrors, SwPlanes
 from ..core.snapshot import InstanceRef, ProjectSnapshot, SnapshotCoverage
 from ..core.policy import OperationClass
 from ..inspection.snapshots import SnapshotCursorError, SnapshotStore
+from ..inspection.documents import inspect_feature_tree
 from ..registry import tool
 from .assembly import list_components
 
@@ -79,6 +80,43 @@ def inspect_document(
         unresolved = []
         complete = True
         truncated = False
+        observations = []
+
+        if "summary" in requested:
+            observations.append({
+                "section": "summary",
+                "source": "SolidWorks COM",
+                "document_id": target.document_id,
+                "configuration": target.configuration,
+                "revision_token": target.revision_token,
+                "state": "known",
+            })
+
+        if {"features", "parameters"} & set(requested):
+            document, document_error = sw.get_active_doc()
+            if document_error:
+                return document_error
+            feature_report = inspect_feature_tree(document, max_depth=depth)
+            if feature_report["unresolved"]:
+                complete = False
+                unresolved.extend(feature_report["unresolved"])
+            common = {
+                "source": "SolidWorks COM",
+                "document_id": target.document_id,
+                "configuration": target.configuration,
+                "revision_token": target.revision_token,
+                "state": "known" if not feature_report["unresolved"] else "unavailable",
+            }
+            if "features" in requested:
+                observations.append({
+                    **common, "section": "features", "value": feature_report["features"],
+                })
+            if "parameters" in requested:
+                observations.append({
+                    **common,
+                    "section": "parameters",
+                    "value": {"equations": feature_report["equations"]},
+                })
 
         if target.document_type == "assembly" and ({"assembly", "dependencies"} & set(requested)):
             component_result = list_components(sw, depth=depth)
@@ -119,14 +157,7 @@ def inspect_document(
             documents=tuple(documents.values()),
             instances=tuple(instances),
             dependency_edges=tuple(dependency_edges),
-            observations=({
-                "section": "summary",
-                "source": "SolidWorks COM",
-                "document_id": target.document_id,
-                "configuration": target.configuration,
-                "revision_token": target.revision_token,
-                "state": "known",
-            },) if "summary" in requested else (),
+            observations=tuple(observations),
             coverage=SnapshotCoverage(
                 complete=complete,
                 visited_count=len(instances),

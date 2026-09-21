@@ -87,6 +87,27 @@ class InspectionGraphTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("STALE_REFERENCE", result["data"]["code"])
 
+    def test_feature_and_parameter_sections_are_exposed_as_sourced_observations(self):
+        feature = type("Feature", (), {
+            "Name": "Imported1",
+            "GetTypeName2": "UnknownFeature",
+            "IsSuppressed": False,
+            "GetFirstSubFeature": None,
+            "GetNextFeature": None,
+            "GetFirstDisplayDimension": None,
+        })()
+        document = type("Part", (), {"FirstFeature": feature, "GetEquationMgr": None})()
+        automation = Automation(document)
+        automation.target = DocumentRef("part-1", None, "part", "Default", "mcp:0")
+
+        result = inspect_document(automation, sections=["features", "parameters"])
+
+        observations = result["data"]["snapshot"]["observations"]
+        self.assertEqual("features", observations[0]["section"])
+        self.assertEqual("UnknownFeature", observations[0]["value"][0]["type"])
+        self.assertEqual("parameters", observations[1]["section"])
+        self.assertEqual([], observations[1]["value"]["equations"])
+
 
 if __name__ == "__main__":
     unittest.main()
