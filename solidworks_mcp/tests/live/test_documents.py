@@ -10,6 +10,7 @@ from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.export import export_step, export_stl
+from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.views import capture_view
 
 
@@ -42,6 +43,18 @@ class LiveDocumentTargetTests(unittest.TestCase):
         title = result["data"]["name"]
         self.created_titles.append(title)
         return title
+
+    def _top_level_feature_types(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        types = []
+        feature = com(document, "FirstFeature")
+        retained = []
+        while feature is not None:
+            retained.append(feature)
+            types.append(com(feature, "GetTypeName2"))
+            feature = com(feature, "GetNextFeature")
+        return types
 
     def test_focus_change_rejects_old_target_until_explicit_rebind(self):
         first_title = self._new_part()
@@ -176,6 +189,27 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertTrue(stl_result["success"], stl_result["message"])
         self.assertGreater(step_path.stat().st_size, 0)
         self.assertGreater(stl_path.stat().st_size, 0)
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_undo_and_redo_restore_a_scratch_extrusion_without_saving(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-20, -10, 20, 10, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(8, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        self.assertIn("Extrusion", self._top_level_feature_types())
+
+        undo_result = undo(self.automation)
+        self.assertTrue(undo_result["success"], undo_result["message"])
+        self.assertNotIn("Extrusion", self._top_level_feature_types())
+
+        redo_result = redo(self.automation)
+        self.assertTrue(redo_result["success"], redo_result["message"])
+        self.assertIn("Extrusion", self._top_level_feature_types())
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
