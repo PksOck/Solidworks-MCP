@@ -16,6 +16,7 @@ from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature,
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
+from solidworks_mcp.tools.weldments import create_structural_member, list_weldment_profiles
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
@@ -305,6 +306,17 @@ class LiveDocumentTargetTests(unittest.TestCase):
             total += com(body, "GetMassProperties", 0.0)[3] * 1e9
         return total
 
+    def _last_sketch_name(self, document):
+        name = None
+        retained = []
+        feature = com(document, "FirstFeature")
+        while feature is not None:
+            retained.append(feature)
+            if com(feature, "GetTypeName2") == "ProfileFeature":
+                name = com(feature, "Name")
+            feature = com(feature, "GetNextFeature")
+        return name
+
     def _segment_lengths(self, sketch_name):
         document, error = self.automation.get_active_doc()
         self.assertIsNone(error)
@@ -352,6 +364,55 @@ class LiveDocumentTargetTests(unittest.TestCase):
         extrusion = self.automation.extrude_sketch(10, False, "mm")
         self.assertTrue(extrusion["success"], extrusion["message"])
         return part_title
+
+    def test_create_structural_member_on_scratch_part_without_saving(self):
+        part_title = self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        self.assertTrue(self.automation.draw_line(0, 0, 100, 0, "mm")["success"])
+        self.assertTrue(self.automation.draw_line(100, 0, 100, 60, "mm")["success"])
+        self._close_sketch()
+
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        sketch_name = self._last_sketch_name(document)
+        self.assertIsNotNone(sketch_name, "No sketch feature was created.")
+
+        packages = list_weldment_profiles(self.automation, filter="square tube")
+        self.assertTrue(packages["success"], packages["message"])
+        profiles = packages["data"]["profiles"]
+        self.assertTrue(profiles, "No square tube weldment profile is available.")
+        chosen = next(
+            (item for item in profiles if item["folder"].casefold().startswith("iso")),
+            profiles[0],
+        )
+
+        result = create_structural_member(self.automation, sketch_name, chosen["path"])
+
+        self.assertTrue(result["success"], result["message"])
+        types = []
+        feature = com(document, "FirstFeature")
+        retained = []
+        while feature is not None:
+            retained.append(feature)
+            types.append(com(feature, "GetTypeName2"))
+            feature = com(feature, "GetNextFeature")
+        self.assertIn("WeldmentFeature", types, "Weldment folder feature was not created.")
+        self.assertIn("WeldMemberFeat", types, "No structural member feature was created.")
+
+        volumes = sorted(
+            (com(body, "GetMassProperties", 0.0)[3] * 1e9
+             for body in com(document, "GetBodies2", 0, True) or []),
+            reverse=True,
+        )
+        self.assertEqual(2, len(volumes), "Expected one body per sketch segment.")
+        self.assertGreater(volumes[0], 0)
+        self.assertGreater(volumes[1], 0)
+        self.assertAlmostEqual(100 / 60, volumes[0] / volumes[1], delta=0.05)
+
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
 
     def test_save_part_and_drawing_with_views_into_output_root(self):
         root = Path(self.automation._path_policy.output_roots[0])
