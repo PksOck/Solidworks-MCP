@@ -108,6 +108,29 @@ class InspectionGraphTests(unittest.TestCase):
         self.assertEqual("parameters", observations[1]["section"])
         self.assertEqual([], observations[1]["value"]["equations"])
 
+    def test_document_dependencies_add_graph_edges_and_keep_missing_references(self):
+        extension = type("Extension", (), {
+            "GetDependencies": lambda self, *args: (
+                "DrawingView", r"C:\project\model.SLDPRT", "MissingView", ""
+            ),
+        })()
+        document = type("Drawing", (), {"Extension": extension})()
+        automation = Automation(document)
+        automation.target = DocumentRef(
+            "drawing-1", r"C:\project\sheet.SLDDRW", "drawing", "Default", "mcp:0"
+        )
+
+        result = inspect_document(automation, sections=["dependencies"])
+
+        snapshot = result["data"]["snapshot"]
+        self.assertEqual(2, len(snapshot["documents"]))
+        self.assertEqual("document_reference", snapshot["dependency_edges"][0]["kind"])
+        self.assertEqual("known", snapshot["dependency_edges"][0]["state"])
+        self.assertIsNone(snapshot["dependency_edges"][1]["target"])
+        self.assertEqual("unresolved", snapshot["dependency_edges"][1]["state"])
+        self.assertFalse(snapshot["coverage"]["complete"])
+        self.assertIn("MissingView", snapshot["coverage"]["unresolved"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

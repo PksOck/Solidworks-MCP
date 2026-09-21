@@ -8,7 +8,7 @@ from ..constants import SwErrors, SwPlanes
 from ..core.snapshot import InstanceRef, ProjectSnapshot, SnapshotCoverage
 from ..core.policy import OperationClass
 from ..inspection.snapshots import SnapshotCursorError, SnapshotStore
-from ..inspection.documents import inspect_feature_tree
+from ..inspection.documents import inspect_dependencies, inspect_feature_tree
 from ..registry import tool
 from .assembly import list_components
 
@@ -118,6 +118,48 @@ def inspect_document(
                     "value": {"equations": feature_report["equations"]},
                 })
 
+        if "dependencies" in requested:
+            document, document_error = sw.get_active_doc()
+            if document_error:
+                return document_error
+            dependency_report = inspect_dependencies(document)
+            complete = complete and dependency_report["complete"]
+            unresolved.extend(dependency_report["unresolved"])
+            observations.append({
+                "section": "dependencies",
+                "source": dependency_report["source_method"],
+                "document_id": target.document_id,
+                "configuration": target.configuration,
+                "revision_token": target.revision_token,
+                "state": "known" if dependency_report["complete"] else "unavailable",
+                "value": {
+                    "count": len(dependency_report["dependencies"]),
+                    "evidence": dependency_report["evidence"],
+                },
+            })
+            for dependency in dependency_report["dependencies"]:
+                dependency_path = dependency["path"]
+                dependency_document = None
+                if dependency_path:
+                    dependency_document = sw._document_session.capture(
+                        title=PureWindowsPath(dependency_path).name,
+                        path=dependency_path,
+                        document_type=_component_document_type(dependency_path),
+                        configuration=None,
+                    )
+                    documents.setdefault(
+                        dependency_document.document_id, dependency_document
+                    )
+                dependency_edges.append({
+                    "source": target.document_id,
+                    "target": (
+                        dependency_document.document_id if dependency_document else None
+                    ),
+                    "referenced_name": dependency["name"],
+                    "kind": "document_reference",
+                    "state": dependency["state"],
+                    "source_method": dependency["source"],
+                })
         if target.document_type == "assembly" and ({"assembly", "dependencies"} & set(requested)):
             component_result = list_components(sw, depth=depth)
             if not component_result["success"]:
@@ -125,8 +167,8 @@ def inspect_document(
             component_data = component_result["data"]
             coverage = component_data["coverage"]
             unresolved.extend(coverage["unresolved"])
-            complete = bool(coverage["complete"])
-            truncated = bool(coverage["truncated"])
+            complete = complete and bool(coverage["complete"])
+            truncated = truncated or bool(coverage["truncated"])
             for component in component_data["components"]:
                 path = component.get("path")
                 component_document = sw._document_session.capture(

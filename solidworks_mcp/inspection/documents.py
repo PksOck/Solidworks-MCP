@@ -7,6 +7,72 @@ from typing import Any
 from ..comutil import com
 
 
+def inspect_dependencies(document) -> dict[str, Any]:
+    """Return document dependency pairs without hiding broken references.
+
+    The current extension API is preferred.  The obsolete document API is a
+    compatibility fallback for older SolidWorks releases or unusual COM
+    dispatch wrappers.
+    """
+    evidence: list[str] = []
+    unresolved: list[str] = []
+    source_method = "IModelDocExtension.GetDependencies"
+
+    try:
+        extension = com(document, "Extension")
+        payload = com(extension, "GetDependencies", True, False, False, True, True)
+    except Exception as extension_error:
+        source_method = "IModelDoc2.GetDependencies2"
+        evidence.append(
+            f"Compatibility fallback used after extension API failure: {extension_error}"
+        )
+        try:
+            payload = com(document, "GetDependencies2", True, False, False)
+        except Exception as fallback_error:
+            unresolved.append(
+                "Dependency inspection unavailable: "
+                f"extension={extension_error}; fallback={fallback_error}"
+            )
+            return {
+                "dependencies": [],
+                "unresolved": unresolved,
+                "complete": False,
+                "source_method": source_method,
+                "evidence": evidence,
+            }
+
+    if payload is None:
+        values: list[Any] = []
+    elif isinstance(payload, (list, tuple)):
+        values = list(payload)
+    else:
+        values = [payload]
+
+    dependencies = []
+    for index in range(0, len(values), 2):
+        raw_name = values[index]
+        raw_path = values[index + 1] if index + 1 < len(values) else None
+        name = str(raw_name) if raw_name not in (None, "") else "<unknown>"
+        path = str(raw_path).strip() if raw_path not in (None, "") else None
+        state = "known" if path else "unresolved"
+        dependencies.append({
+            "name": name,
+            "path": path,
+            "state": state,
+            "source": source_method,
+        })
+        if not path:
+            unresolved.append(f"Dependency {name}: referenced path is unavailable")
+
+    return {
+        "dependencies": dependencies,
+        "unresolved": unresolved,
+        "complete": not unresolved,
+        "source_method": source_method,
+        "evidence": evidence,
+    }
+
+
 def inspect_feature_tree(document, *, max_depth: int = 8) -> dict[str, Any]:
     """Read a feature tree without dropping unknown nodes or unavailable values."""
     unresolved: list[str] = []

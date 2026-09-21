@@ -87,6 +87,24 @@ class LiveDocumentTargetTests(unittest.TestCase):
         feature_types = [item["type"] for item in observations[0]["value"]]
         self.assertIn("Extrusion", feature_types)
 
+    def test_inspect_unsaved_part_dependencies_uses_compatibility_fallback(self):
+        self._new_part()
+
+        result = inspect_document(self.automation, sections=["dependencies"])
+
+        self.assertTrue(result["success"], result["message"])
+        snapshot = result["data"]["snapshot"]
+        self.assertEqual([], snapshot["dependency_edges"])
+        self.assertEqual(
+            "IModelDoc2.GetDependencies2",
+            snapshot["observations"][0]["source"],
+            snapshot["observations"][0],
+        )
+        self.assertIn(
+            "fallback",
+            snapshot["observations"][0]["value"]["evidence"][0].lower(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
