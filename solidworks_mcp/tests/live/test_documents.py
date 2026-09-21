@@ -10,7 +10,10 @@ from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.constants import SwDocumentTypes
 from solidworks_mcp.core.session import TargetMismatchError
-from solidworks_mcp.tools.assembly import list_mates
+from solidworks_mcp.tools.assembly import (
+    insert_component, list_component_faces, list_components, list_mates,
+    mate_coincident, mate_concentric, mate_distance,
+)
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
@@ -348,6 +351,37 @@ class LiveDocumentTargetTests(unittest.TestCase):
             feature = com(feature, "GetNextFeature")
         return None
 
+    def _new_saved_cylinder(self, radius_mm, height_mm, filename):
+        root = Path(self.automation._path_policy.output_roots[0])
+        path = root / "saved" / filename
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        circle = self.automation.draw_circle(0, 0, radius_mm, "mm")
+        self.assertTrue(circle["success"], circle["message"])
+        self._close_sketch()
+        extrusion = self.automation.extrude_sketch(height_mm, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        saved = save_document(self.automation, path=str(path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.created_titles.append(str(com(document, "GetTitle")))
+        return str(path)
+
+    def _mate_count(self):
+        result = list_mates(self.automation)
+        self.assertTrue(result["success"], result["message"])
+        return len(result["data"]["mates"])
+
+    def _component_face_index(self, component_name, kind):
+        result = list_component_faces(self.automation, component_name)
+        self.assertTrue(result["success"], result["message"])
+        for face in result["data"]["faces"]:
+            if face["kind"] == kind:
+                return face["index"]
+        return None
+
     def _new_drawing(self, paper_size="A4"):
         result = self.automation.create_new_drawing(paper_size)
         self.assertTrue(result["success"], result["message"])
@@ -378,6 +412,50 @@ class LiveDocumentTargetTests(unittest.TestCase):
         extrusion = self.automation.extrude_sketch(10, False, "mm")
         self.assertTrue(extrusion["success"], extrusion["message"])
         return part_title
+
+    def test_assembly_insert_components_and_mate_without_saving(self):
+        path_a = self._new_saved_cylinder(10.0, 20.0, "mcp_live_asm_a.SLDPRT")
+        path_b = self._new_saved_cylinder(6.0, 20.0, "mcp_live_asm_b.SLDPRT")
+        path_c = self._new_saved_cylinder(8.0, 20.0, "mcp_live_asm_c.SLDPRT")
+
+        created = self.automation.create_new_assembly()
+        self.assertTrue(created["success"], created["message"])
+        self.created_titles.append(created["data"]["name"])
+
+        names = []
+        for index, path in enumerate((path_a, path_b, path_c)):
+            inserted = insert_component(self.automation, path, 0.04 * index, 0.0, 0.0)
+            self.assertTrue(inserted["success"], inserted["message"])
+            names.append(inserted["data"]["name"])
+        name_a, name_b, name_c = names
+
+        components = list_components(self.automation)
+        self.assertTrue(components["success"], components["message"])
+        self.assertEqual(3, len(components["data"]["components"]))
+
+        # A cylinder gives both a planar cap and a cylindrical wall, so the
+        # same pair of components can carry a coincident and a concentric mate.
+        coincident = mate_coincident(
+            self.automation, name_a, self._component_face_index(name_a, "planar"),
+            name_b, self._component_face_index(name_b, "planar"))
+        self.assertTrue(coincident["success"], coincident["message"])
+
+        # Indexes are only valid for the current model state, so re-read them.
+        concentric = mate_concentric(
+            self.automation, name_a, self._component_face_index(name_a, "cylindrical"),
+            name_b, self._component_face_index(name_b, "cylindrical"))
+        self.assertTrue(concentric["success"], concentric["message"])
+        self.assertEqual(2, self._mate_count())
+
+        distance = mate_distance(
+            self.automation, name_a, self._component_face_index(name_a, "planar"),
+            name_c, self._component_face_index(name_c, "planar"), 25.0)
+        self.assertTrue(distance["success"], distance["message"])
+        self.assertEqual(3, self._mate_count())
+
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
 
     def test_sheet_metal_flat_pattern_flatten_and_export(self):
         root = Path(self.automation._path_policy.output_roots[0])
