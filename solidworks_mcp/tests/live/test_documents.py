@@ -13,6 +13,7 @@ from solidworks_mcp.tools.advanced_features import shell_feature
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
+from solidworks_mcp.tools.patterns import mirror_feature
 from solidworks_mcp.tools.reference_geometry import create_reference_plane
 from solidworks_mcp.tools.views import capture_view
 
@@ -234,6 +235,60 @@ class LiveDocumentTargetTests(unittest.TestCase):
             len(after["data"]["planes"]),
         )
         self.assertEqual("reference", after["data"]["planes"][-1]["kind"])
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def _feature_name_by_type(self, fragment):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        feature = com(document, "FirstFeature")
+        retained = []
+        while feature is not None:
+            retained.append(feature)
+            if fragment.casefold() in com(feature, "GetTypeName2").casefold():
+                return com(feature, "Name")
+            feature = com(feature, "GetNextFeature")
+        return None
+
+    def _solid_body_count(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        return len(com(document, "GetBodies2", 0, True) or [])
+
+    def _solid_body_count(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        return len(com(document, "GetBodies2", 0, True) or [])
+
+    def _total_volume_mm3(self):
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        total = 0.0
+        retained = []
+        for body in com(document, "GetBodies2", 0, True) or []:
+            retained.append(body)
+            total += com(body, "GetMassProperties", 0.0)[3] * 1e9
+        return total
+
+    def test_mirror_scratch_extrusion_about_front_plane_without_saving(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(5, -3, 15, 3, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(5, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        seed_name = self._feature_name_by_type("Extrusion")
+        self.assertIsNotNone(seed_name)
+        volume_before = self._total_volume_mm3()
+        self.assertAlmostEqual(300.0, volume_before, delta=1.0)
+
+        result = mirror_feature(self.automation, seed_name, "Front Plane")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertIsNotNone(self._feature_name_by_type("Mirror"))
+        self.assertAlmostEqual(2 * volume_before, self._total_volume_mm3(), delta=1.0)
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
