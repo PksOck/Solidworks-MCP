@@ -49,11 +49,11 @@ def _convert_coordinates(sw, unit, values):
         return None, _invalid(sw, f"Invalid unit or coordinate: {conversion_error}")
 
 
-def _create_entity(sw, method, coordinates, unit, message, data, trailing=()):
+def _create_entity(sw, method, coordinates, unit, message, data, leading=(), trailing=()):
     """Call one SketchManager create method with metre coordinates.
 
-    ``trailing`` carries non-coordinate arguments (for example an arc
-    direction flag) that must not be unit-converted.
+    ``leading`` and ``trailing`` carry non-coordinate arguments (an arc
+    direction flag, a slot creation type) that must not be unit-converted.
     """
     document, error = sw.get_active_doc()
     if error:
@@ -61,8 +61,9 @@ def _create_entity(sw, method, coordinates, unit, message, data, trailing=()):
     meters, conversion_error = _convert_coordinates(sw, unit, coordinates)
     if conversion_error:
         return conversion_error
+    arguments = list(leading) + list(meters) + list(trailing)
     try:
-        entity = com(com(document, "SketchManager"), method, *(list(meters) + list(trailing)))
+        entity = com(com(document, "SketchManager"), method, *arguments)
     except Exception as create_error:
         return sw._result(
             False, f"{message} failed: {create_error}", SwErrors.swSketchError
@@ -366,6 +367,128 @@ def draw_elliptical_arc(sw, cx: float = 0, cy: float = 0, major_radius: float = 
             "counter_clockwise": counter_clockwise,
         },
         trailing=[direction],
+    )
+
+
+@tool(
+    name="draw_tangent_arc",
+    description=(
+        "Draw a tangent arc from an existing segment endpoint to a second point. "
+        "The first point must be an endpoint of an existing sketch segment."
+    ),
+    schema={"type": "object", "properties": {
+        "start_x": {"type": "number"},
+        "start_y": {"type": "number"},
+        "end_x": {"type": "number"},
+        "end_y": {"type": "number"},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["start_x", "start_y", "end_x", "end_y"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_tangent_arc(sw, start_x: float, start_y: float, end_x: float, end_y: float,
+                     unit: str = "mm") -> dict:
+    if (start_x, start_y) == (end_x, end_y):
+        return _invalid(sw, "Tangent arc start and end points must differ.")
+    # ArcType was probed live in SW 2025: values 0-3 all produce an identical
+    # arc for a 2D tangent arc, so the flag is fixed at 0 rather than exposed.
+    return _create_entity(
+        sw, "CreateTangentArc",
+        [start_x, start_y, 0.0, end_x, end_y, 0.0],
+        unit,
+        "Tangent arc created.",
+        {"start": [start_x, start_y], "end": [end_x, end_y]},
+        trailing=[0],
+    )
+
+
+# swSketchSlotCreationType_e: line=0, center_line=1, arc=2, 3pointarc=3
+SW_SLOT_ARC = 2
+SW_SLOT_3POINT_ARC = 3
+
+# swSketchSlotLengthType_e: CenterCenter=0, FullLength=1
+SW_SLOT_CENTER_CENTER = 0
+
+
+# CreateSketchSlot order is
+# (SlotCreationType, SlotLengthType, Width, X1..Z1, X2..Z2, X3..Z3,
+#  CenterArcDirection, AddDimension): two non-coordinate arguments lead, two
+# trail, and only the width plus the nine coordinates are unit-converted.
+def _slot_call(sw, creation_type, width, points, unit, message, data):
+    coordinates = [width]
+    for x, y in points:
+        coordinates.extend([x, y, 0.0])
+    return _create_entity(
+        sw, "CreateSketchSlot",
+        coordinates,
+        unit,
+        message,
+        data,
+        leading=[creation_type, SW_SLOT_CENTER_CENTER],
+        trailing=[1, False],
+    )
+
+
+@tool(
+    name="draw_arc_slot",
+    description=(
+        "Draw an arc slot from an arc center, an arc start point and an arc end "
+        "point, plus the slot width."
+    ),
+    schema={"type": "object", "properties": {
+        "center_x": {"type": "number"},
+        "center_y": {"type": "number"},
+        "start_x": {"type": "number"},
+        "start_y": {"type": "number"},
+        "end_x": {"type": "number"},
+        "end_y": {"type": "number"},
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["center_x", "center_y", "start_x", "start_y",
+                   "end_x", "end_y", "width"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_arc_slot(sw, center_x: float, center_y: float, start_x: float, start_y: float,
+                  end_x: float, end_y: float, width: float, unit: str = "mm") -> dict:
+    points = [(center_x, center_y), (start_x, start_y), (end_x, end_y)]
+    if len(set(points)) < 3:
+        return _invalid(sw, "Arc slot center, start and end points must be distinct.")
+    if not _is_number(width) or width <= 0:
+        return _invalid(sw, "Slot width must be a positive finite number.")
+    return _slot_call(
+        sw, SW_SLOT_ARC, width, points, unit,
+        f"Arc slot created with width {width}{unit}.",
+        {"center": [center_x, center_y], "start": [start_x, start_y],
+         "end": [end_x, end_y], "width": width},
+    )
+
+
+@tool(
+    name="draw_arc_slot_3point",
+    description=(
+        "Draw a 3-point arc slot through three points on the slot centerline, "
+        "plus the slot width."
+    ),
+    schema={"type": "object", "properties": {
+        "x1": {"type": "number"}, "y1": {"type": "number"},
+        "x2": {"type": "number"}, "y2": {"type": "number"},
+        "x3": {"type": "number"}, "y3": {"type": "number"},
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["x1", "y1", "x2", "y2", "x3", "y3", "width"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_arc_slot_3point(sw, x1: float, y1: float, x2: float, y2: float,
+                         x3: float, y3: float, width: float,
+                         unit: str = "mm") -> dict:
+    points = [(x1, y1), (x2, y2), (x3, y3)]
+    if len(set(points)) < 3:
+        return _invalid(sw, "Arc slot points must be distinct.")
+    if not _is_number(width) or width <= 0:
+        return _invalid(sw, "Slot width must be a positive finite number.")
+    return _slot_call(
+        sw, SW_SLOT_3POINT_ARC, width, points, unit,
+        f"3-point arc slot created with width {width}{unit}.",
+        {"points": [list(point) for point in points], "width": width},
     )
 
 

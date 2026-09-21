@@ -5,9 +5,10 @@ from solidworks_mcp.constants import SwErrors
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_entities import (
-    draw_center_rectangle, draw_centerline, draw_circle_radius, draw_ellipse,
-    draw_elliptical_arc, draw_parallelogram, draw_parabola, draw_point,
-    draw_rectangle_3point_center, draw_rectangle_3point_corner,
+    draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
+    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_parallelogram,
+    draw_parabola, draw_point, draw_rectangle_3point_center,
+    draw_rectangle_3point_corner, draw_tangent_arc,
 )
 
 
@@ -257,6 +258,81 @@ class ParabolaBehaviorTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(SwErrors.swInvalidInput, result["error_code"])
+
+
+class TangentArcAndSlotBehaviorTests(unittest.TestCase):
+    def test_tangent_arc_is_registered_as_a_mutation(self):
+        tools = {item.name: item for item in registered_tools()}
+
+        for name in ("draw_tangent_arc", "draw_arc_slot", "draw_arc_slot_3point"):
+            self.assertIn(name, tools)
+            self.assertIs(OperationClass.MUTATE, operation_class_for(name))
+
+    def test_tangent_arc_passes_zero_arc_type_after_the_coordinates(self):
+        automation = Automation()
+
+        result = draw_tangent_arc(automation, start_x=20, start_y=0, end_x=30, end_y=10)
+
+        self.assertTrue(result["success"], result["message"])
+        method, arguments = automation.document.SketchManager.calls[0]
+        self.assertEqual("CreateTangentArc", method)
+        self.assertEqual(7, len(arguments))
+        self.assertAlmostEqual(0.020, arguments[0], places=12)
+        self.assertAlmostEqual(0.030, arguments[3], places=12)
+        self.assertEqual(0, arguments[6])
+
+    def test_tangent_arc_rejects_coincident_points_before_com(self):
+        automation = Automation()
+
+        result = draw_tangent_arc(automation, start_x=5, start_y=5, end_x=5, end_y=5)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(SwErrors.swInvalidInput, result["error_code"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    def test_arc_slot_splits_non_coordinate_arguments_around_the_geometry(self):
+        automation = Automation()
+
+        result = draw_arc_slot(automation, center_x=0, center_y=0, start_x=10, start_y=0,
+                              end_x=0, end_y=10, width=4)
+
+        self.assertTrue(result["success"], result["message"])
+        method, arguments = automation.document.SketchManager.calls[0]
+        self.assertEqual("CreateSketchSlot", method)
+        # (CreationType, LengthType, Width, center, start, end, direction, add-dim)
+        self.assertEqual(2, arguments[0])
+        self.assertEqual(0, arguments[1])
+        self.assertAlmostEqual(0.004, arguments[2], places=12)
+        self.assertAlmostEqual(0.0, arguments[3], places=12)
+        self.assertAlmostEqual(0.010, arguments[6], places=12)
+        self.assertAlmostEqual(0.0, arguments[9], places=12)
+        self.assertAlmostEqual(0.010, arguments[10], places=12)
+        self.assertEqual((1, False), arguments[12:14])
+
+    def test_3point_arc_slot_uses_the_three_point_creation_type(self):
+        automation = Automation()
+
+        result = draw_arc_slot_3point(automation, x1=-10, y1=0, x2=0, y2=8, x3=10, y3=0,
+                                     width=3)
+
+        self.assertTrue(result["success"], result["message"])
+        _method, arguments = automation.document.SketchManager.calls[0]
+        self.assertEqual(3, arguments[0])
+        self.assertAlmostEqual(0.003, arguments[2], places=12)
+
+    def test_arc_slot_rejects_zero_width_and_coincident_points(self):
+        zero_width = Automation()
+        coincident = Automation()
+
+        width_result = draw_arc_slot(zero_width, center_x=0, center_y=0, start_x=10,
+                                     start_y=0, end_x=0, end_y=10, width=0)
+        point_result = draw_arc_slot_3point(coincident, x1=1, y1=1, x2=1, y2=1,
+                                            x3=1, y3=1, width=3)
+
+        self.assertFalse(width_result["success"])
+        self.assertFalse(point_result["success"])
+        self.assertEqual([], zero_width.document.SketchManager.calls)
+        self.assertEqual([], coincident.document.SketchManager.calls)
 
 
 if __name__ == "__main__":

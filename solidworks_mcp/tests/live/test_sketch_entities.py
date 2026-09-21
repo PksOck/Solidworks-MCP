@@ -4,9 +4,10 @@ import unittest
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.tools.sketch_entities import (
-    draw_center_rectangle, draw_centerline, draw_circle_radius, draw_ellipse,
-    draw_elliptical_arc, draw_parallelogram, draw_parabola, draw_point,
-    draw_rectangle_3point_center, draw_rectangle_3point_corner,
+    draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
+    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_parallelogram,
+    draw_parabola, draw_point, draw_rectangle_3point_center,
+    draw_rectangle_3point_corner, draw_tangent_arc,
 )
 
 
@@ -97,6 +98,37 @@ class LiveSketchEntityTests(unittest.TestCase):
                     after - before, minimum_segments,
                     f"{label} added {after - before} segments, expected {minimum_segments}",
                 )
+
+    def test_tangent_arc_and_arc_slots_create_geometry_without_saving(self):
+        self._new_part()
+
+        # A tangent arc needs an existing segment endpoint to be tangent to.
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        line = self.automation.draw_line(0, 0, 20, 0, "mm")
+        self.assertTrue(line["success"], line["message"])
+        before = self._segment_count()
+        arc = draw_tangent_arc(self.automation, 20, 0, 30, 10)
+        self.assertTrue(arc["success"], arc["message"])
+        self.assertGreaterEqual(self._segment_count() - before, 1)
+        self.automation.exit_sketch()
+
+        for label, call in [
+            ("arc slot", lambda: draw_arc_slot(
+                self.automation, 0, 0, 30, 0, 0, 30, 6)),
+            ("3-point arc slot", lambda: draw_arc_slot_3point(
+                self.automation, -30, 0, 0, 12, 30, 0, 6)),
+        ]:
+            with self.subTest(entity=label):
+                sketch = self.automation.create_sketch("Front", exact_geometry=True)
+                self.assertTrue(sketch["success"], sketch["message"])
+                before = self._segment_count()
+                slot_before = self._count("GetSketchSlotCount")
+                result = call()
+                self.assertTrue(result["success"], result["message"])
+                self.assertGreater(self._segment_count(), before)
+                self.assertEqual(slot_before + 1, self._count("GetSketchSlotCount"))
+                self.automation.exit_sketch()
 
     def test_ellipse_parabola_and_point_getters_report_the_geometry(self):
         self._new_part()
