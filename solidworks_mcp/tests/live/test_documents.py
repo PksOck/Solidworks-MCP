@@ -1,6 +1,7 @@
 import os
 import unittest
 from pathlib import Path
+from uuid import uuid4
 
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
@@ -8,6 +9,7 @@ from solidworks_mcp.constants import SwDocumentTypes
 from solidworks_mcp.core.session import TargetMismatchError
 from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
+from solidworks_mcp.tools.export import export_step, export_stl
 from solidworks_mcp.tools.views import capture_view
 
 
@@ -149,6 +151,31 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertEqual(b"\x89PNG\r\n\x1a\n", Path(artifact["path"]).read_bytes()[:8])
         self.assertEqual([640, 480], artifact["pixel_size"])
         self.assertEqual([], result["data"]["restore_warnings"])
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_export_scratch_part_to_step_and_stl_without_saving_native_model(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-20, -10, 20, 10, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(8, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        output_root = self.automation._path_policy.output_roots[0] / "exports"
+        stem = f"scratch-{uuid4().hex}"
+        step_path = output_root / f"{stem}.step"
+        stl_path = output_root / f"{stem}.stl"
+        self.created_artifacts.extend((str(step_path), str(stl_path)))
+
+        step_result = export_step(self.automation, str(step_path))
+        stl_result = export_stl(self.automation, str(stl_path))
+
+        self.assertTrue(step_result["success"], step_result["message"])
+        self.assertTrue(stl_result["success"], stl_result["message"])
+        self.assertGreater(step_path.stat().st_size, 0)
+        self.assertGreater(stl_path.stat().st_size, 0)
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)

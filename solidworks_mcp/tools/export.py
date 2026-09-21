@@ -3,8 +3,10 @@ Export tools (part G): planar face and flat pattern export to DXF.
 """
 
 import logging
+import hashlib
 import math
 import os
+from pathlib import Path
 
 import pythoncom
 import win32com.client
@@ -21,6 +23,93 @@ SW_DOC_PART = 1
 SW_SOLID_BODY = 0
 SW_EXPORT_SELECTED_FACES_OR_LOOPS = 2
 MAX_LOOP_ITER = 500
+SW_SAVE_AS_SILENT = 1
+
+
+def _export_native_model(sw, output_path: str, allowed_extensions: set[str], format_name: str):
+    path = Path(output_path).expanduser().resolve()
+    if path.suffix.casefold() not in allowed_extensions:
+        allowed = ", ".join(sorted(allowed_extensions))
+        return sw._result(
+            False, f"{format_name} output must use one of: {allowed}.",
+            SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"},
+        )
+    if path.exists():
+        return sw._result(
+            False, f"Export path already exists: {path}", SwErrors.swFileSaveError,
+            {"code": "OUTPUT_EXISTS"},
+        )
+    denied = require_output_write(sw, str(path))
+    if denied:
+        return denied
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    errors = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    warnings = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    empty_export = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+    try:
+        extension = com(document, "Extension")
+        succeeded = com(
+            extension, "SaveAs", str(path), 0, SW_SAVE_AS_SILENT,
+            empty_export, errors, warnings
+        )
+    except Exception as export_error:
+        path.unlink(missing_ok=True)
+        return sw._result(
+            False, f"{format_name} export failed: {export_error}", SwErrors.swExportError
+        )
+    if not succeeded or errors.value or not path.is_file():
+        path.unlink(missing_ok=True)
+        return sw._result(
+            False, f"{format_name} export failed (code {errors.value}).",
+            SwErrors.swExportError,
+            {"save_error_code": int(errors.value), "save_warning_code": int(warnings.value)},
+        )
+
+    payload = path.read_bytes()
+    return sw._result(True, f"Exported {format_name} to {path}.", data={
+        "path": str(path),
+        "format": format_name,
+        "save_warning_code": int(warnings.value),
+        "verification": {
+            "method": "sha256",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+        },
+    })
+
+
+@tool(
+    name="export_step",
+    description="Export the active model to a new STEP/STP file without saving the native document.",
+    schema={"type": "object", "properties": {
+        "output_path": {"type": "string", "description": "New .step or .stp path."},
+    }, "required": ["output_path"]},
+    operation_class=OperationClass.EXPORT,
+)
+def export_step(sw, output_path: str) -> dict:
+    return _export_native_model(sw, output_path, {".step", ".stp"}, "STEP")
+
+
+@tool(
+    name="export_stl",
+    description=(
+        "Export the active model to a new STL file using the current SolidWorks "
+        "tessellation and binary/ASCII preferences."
+    ),
+    schema={"type": "object", "properties": {
+        "output_path": {"type": "string", "description": "New .stl path."},
+    }, "required": ["output_path"]},
+    operation_class=OperationClass.EXPORT,
+)
+def export_stl(sw, output_path: str) -> dict:
+    result = _export_native_model(sw, output_path, {".stl"}, "STL")
+    if result.get("success"):
+        result["data"]["settings_source"] = "SolidWorks user preferences"
+    return result
 
 
 @tool(
