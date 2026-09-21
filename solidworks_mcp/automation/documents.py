@@ -199,8 +199,12 @@ class DocumentOperations:
             # Open document
             errors = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
             warnings = win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
-            
-            doc = self._sw_app.OpenDoc6(filepath, int(doc_type), 0, "", errors, warnings)
+
+            # pywin32's typed gen_py wrapper calls int() on the byref VARIANTs and
+            # raises "int() argument ... not 'VARIANT'"; dynamic dispatch forwards
+            # them unchanged (api-findings.md 21.1).
+            app = win32com.client.dynamic.Dispatch(self._sw_app)
+            doc = app.OpenDoc6(filepath, int(doc_type), 0, "", errors, warnings)
             
             if doc is None or errors.value != 0:
                 return self._result(False, f"Failed to open (error {errors.value})",

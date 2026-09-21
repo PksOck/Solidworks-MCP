@@ -63,6 +63,25 @@ def _local_to_global(local_pt, tfdata):
     return gx, gy, gz
 
 
+def _component_bodies(component):
+    """
+    All solid bodies of a component, in a stable order.
+
+    api-findings.md 21.5: IComponent2.GetBody returns only the FIRST body, so
+    a multi-body part (e.g. a bearing modelled as two separate rings) exposed
+    none of the faces on its other bodies and every mate against it failed.
+    GetBodies2 is preferred, with GetBody as a fallback for mocks/older builds.
+    """
+    try:
+        bodies = com(component, "GetBodies2", 0, True) or []
+    except Exception:
+        bodies = []
+    if not bodies:
+        body = com(component, "GetBody")
+        bodies = [body] if body is not None else []
+    return bodies
+
+
 def _component_faces(component):
     """
     Enumerates a component's faces in a stable order (planar and
@@ -71,16 +90,14 @@ def _component_faces(component):
     into this list is the face_index used by list_component_faces and
     the mate_* tools.
     """
-    body = com(component, "GetBody")
-    if body is None:
-        return []
     result = []
-    for face in com(body, "GetFaces") or []:
-        surface = com(face, "GetSurface")
-        if com(surface, "IsPlane"):
-            result.append((face, "planar"))
-        elif com(surface, "IsCylinder"):
-            result.append((face, "cylindrical"))
+    for body in _component_bodies(component):
+        for face in com(body, "GetFaces") or []:
+            surface = com(face, "GetSurface")
+            if com(surface, "IsPlane"):
+                result.append((face, "planar"))
+            elif com(surface, "IsCylinder"):
+                result.append((face, "cylindrical"))
     return result
 
 
@@ -95,9 +112,10 @@ def _face_local_point(face, kind):
     or pick the wrong adjacent face.
 
     - planar: centroid of the face's own local bounding box.
-    - cylindrical: a point offset inward along the axis from its origin,
-      plus the radius outward, so it sits mid-height on the cylindrical
-      wall rather than on the end-cap seam.
+    - cylindrical: the axis is advanced to the axial middle of the face's
+      own bounding box (not a fixed 5 mm from the axis origin, which can
+      fall past the end cap and off the face), then stepped out radially,
+      so it sits mid-height on the cylindrical wall.
     """
     surface = com(face, "GetSurface")
     if kind == "planar":
@@ -106,6 +124,13 @@ def _face_local_point(face, kind):
                 (fbox[2] + fbox[5]) / 2]
     else:
         ax, ay, az, dx, dy, dz, radius = com(surface, "CylinderParams")[:7]
+        fbox = list(com(face, "GetBox", True))
+        cx = (fbox[0] + fbox[3]) / 2
+        cy = (fbox[1] + fbox[4]) / 2
+        cz = (fbox[2] + fbox[5]) / 2
+        # axial coordinate of the face's own box centre, applied to the axis
+        t = (cx - ax) * dx + (cy - ay) * dy + (cz - az) * dz
+        bx, by, bz = ax + dx * t, ay + dy * t, az + dz * t
         # perpendicular-to-axis direction for the radial offset
         px, py, pz = (1.0, 0.0, 0.0) if abs(dx) < 0.9 else (0.0, 1.0, 0.0)
         # project out the axis component, normalize
@@ -113,14 +138,18 @@ def _face_local_point(face, kind):
         px, py, pz = px - dot * dx, py - dot * dy, pz - dot * dz
         n = (px ** 2 + py ** 2 + pz ** 2) ** 0.5
         px, py, pz = px / n, py / n, pz / n
-        return [ax + dx * 0.005 + radius * px,
-                ay + dy * 0.005 + radius * py,
-                az + dz * 0.005 + radius * pz]
+        return [bx + radius * px, by + radius * py, bz + radius * pz]
 
 
 def _select_component_face(asm, component, face_index, append, mark):
     """Selects a component's face by index (see _component_faces) for a
-    mate. Returns True/False from SelectByID2."""
+    mate. Returns True/False from SelectByID2.
+
+    api-findings.md 21.3: a retry loop with nudged points was tried and made
+    things worse -- a nudge can land on a neighbouring face, SelectByID2
+    returns True for the wrong entity, and AddMate5 then fails. Do not add
+    one; keep the single, geometrically-derived point.
+    """
     faces = _component_faces(component)
     if face_index < 0 or face_index >= len(faces):
         return False
@@ -133,11 +162,46 @@ def _select_component_face(asm, component, face_index, append, mark):
                win32com.client.VARIANT(pythoncom.VT_DISPATCH, None), 0)
 
 
+def _open_part_box(sw, filepath):
+    """
+    Union bounding box (metres) of an already-open part document, or None.
+
+    api-findings.md 21.2: AddComponent5 places the component's BOUNDING-BOX
+    CENTRE at the given point, so placing by the part's own origin needs the
+    box centre subtracted first.
+    """
+    app = getattr(sw, "app", None)
+    if app is None:
+        return None
+    try:
+        doc = com(app, "GetOpenDocumentByName", filepath)
+    except Exception:
+        return None
+    if doc is None:
+        return None
+    boxes = []
+    try:
+        for body in com(doc, "GetBodies2", 0, True) or []:
+            box = com(body, "GetBodyBox")
+            if box:
+                boxes.append(list(box))
+    except Exception:
+        return None
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            min(b[2] for b in boxes), max(b[3] for b in boxes),
+            max(b[4] for b in boxes), max(b[5] for b in boxes))
+
+
 @tool(
     name="insert_component",
     description=(
         "Insert a Part or sub-assembly into the active assembly at a "
-        "given position. Position is in meters, assembly space."
+        "given position. Position is in meters, assembly space. By default "
+        "the component's bounding-box centre lands on the point (SolidWorks "
+        "AddComponent5 behaviour); place='origin' instead puts the part's "
+        "own origin on the point, which needs the part already open."
     ),
     schema={
         "type": "object",
@@ -146,12 +210,22 @@ def _select_component_face(asm, component, face_index, append, mark):
             "x": {"type": "number", "description": "X position in meters. Default 0."},
             "y": {"type": "number", "description": "Y position in meters. Default 0."},
             "z": {"type": "number", "description": "Z position in meters. Default 0."},
+            "place": {
+                "type": "string",
+                "enum": ["center", "origin"],
+                "description": (
+                    "'center' (default) = AddComponent5 legacy behaviour, the "
+                    "part's bounding-box centre lands on x,y,z. 'origin' = the "
+                    "part's own origin lands on x,y,z."
+                ),
+            },
         },
         "required": ["filepath"]
     },
     operation_class=OperationClass.MUTATE,
 )
-def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict:
+def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float = 0.0,
+                     place: str = "center") -> dict:
     """Insert a component into the active assembly"""
     asm, err = _require_assembly(sw)
     if err:
@@ -160,6 +234,22 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
     if not os.path.exists(filepath):
         return sw._result(False, f"File not found: {filepath}",
                           SwErrors.swFileNotFoundError)
+
+    place = (place or "center").lower()
+    if place not in ("center", "origin"):
+        return sw._result(False, "place must be 'center' or 'origin'.",
+                          SwErrors.swInvalidInput)
+
+    if place == "origin":
+        box = _open_part_box(sw, filepath)
+        if box is None:
+            return sw._result(
+                False,
+                f"place='origin' needs the part already open and non-empty: {filepath}",
+                SwErrors.swInvalidInput)
+        x -= (box[0] + box[3]) / 2.0
+        y -= (box[1] + box[4]) / 2.0
+        z -= (box[2] + box[5]) / 2.0
 
     try:
         comp = com(asm, "AddComponent5", filepath, SW_ADD_COMPONENT_DEFAULT_CONFIG,
@@ -358,7 +448,11 @@ def _add_mate(sw, asm, component1, face_index1, component2, face_index2,
         return sw._result(
             False,
             "Mate could not be created (selection may not be valid for "
-            "this mate type).",
+            "this mate type). If the two faces are exactly coincident (same "
+            "radius or same plane on two components), SelectByID2 cannot "
+            "resolve the probe point; pick a different face of the pair, "
+            "e.g. a free bore instead of the seat it duplicates "
+            "(api-findings.md 21.3).",
             SwErrors.swFeatureError)
 
     return sw._result(True, f"Mate created between {component1} and {component2}.",
