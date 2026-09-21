@@ -73,7 +73,14 @@ def registered_tools() -> List[Tool]:
     return [entry["tool"] for entry in _TOOLS.values()]
 
 
-def dispatch(name: str, sw, arguments: Dict) -> Optional[Dict]:
+def operation_class_for(name: str) -> OperationClass | None:
+    """Return declared execution semantics for a registered tool."""
+    _load()
+    entry = _TOOLS.get(name)
+    return entry["operation_class"] if entry is not None else None
+
+
+def dispatch(name: str, sw, arguments: Dict, *, preflight: bool = True) -> Optional[Dict]:
     """
     Run a registered tool.
 
@@ -96,7 +103,7 @@ def dispatch(name: str, sw, arguments: Dict) -> Optional[Dict]:
         OperationClass.EXPORT,
     }
     before = None
-    if operation_class in guarded_classes and hasattr(sw, "bind_active_document"):
+    if preflight and operation_class in guarded_classes and hasattr(sw, "bind_active_document"):
         try:
             if hasattr(sw, "has_bound_document") and sw.has_bound_document():
                 before = sw.require_bound_active_document()
@@ -115,6 +122,7 @@ def dispatch(name: str, sw, arguments: Dict) -> Optional[Dict]:
         raise ValueError(f"Tool returned no result: {name}")
     if (
         before is not None
+        and preflight
         and operation_class is OperationClass.MUTATE
         and result.get("success")
         and hasattr(sw, "mark_active_document_mutated")

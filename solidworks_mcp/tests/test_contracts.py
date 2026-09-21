@@ -8,7 +8,7 @@ from solidworks_mcp.core.contracts import (
     QuantityValidationError,
     validate_quantity,
 )
-from solidworks_mcp.core.evidence import OperationJournal
+from solidworks_mcp.core.evidence import JournalState, OperationJournal
 
 
 class QuantityValidationTests(unittest.TestCase):
@@ -70,6 +70,31 @@ class OperationJournalTests(unittest.TestCase):
         replay = journal.run("op-4", lambda: calls.append("again") or OperationResult.completed("op-4", None, {}))
 
         self.assertEqual([], calls)
+        self.assertIs(first, replay)
+
+    def test_inflight_duplicate_returns_unknown_without_reexecuting(self):
+        journal = OperationJournal()
+        self.assertIsNone(journal.reserve("op-5"))
+        journal.mark_running("op-5")
+
+        replay = journal.reserve("op-5")
+
+        self.assertEqual(OperationStatus.UNKNOWN, replay.status)
+        self.assertEqual(JournalState.RUNNING, journal.get_state("op-5"))
+        self.assertEqual("OPERATION_OUTCOME_UNKNOWN", replay.errors[0].code)
+
+    def test_callback_exception_is_recorded_as_failed_and_not_retried(self):
+        journal = OperationJournal()
+        calls = []
+
+        first = journal.run("op-6", lambda: calls.append("ran") or (_ for _ in ()).throw(RuntimeError("boom")))
+        replay = journal.run(
+            "op-6", lambda: calls.append("again") or OperationResult.completed("op-6", None, {})
+        )
+
+        self.assertEqual(["ran"], calls)
+        self.assertEqual(OperationStatus.FAILED, first.status)
+        self.assertEqual(JournalState.FAILED, journal.get_state("op-6"))
         self.assertIs(first, replay)
 
 

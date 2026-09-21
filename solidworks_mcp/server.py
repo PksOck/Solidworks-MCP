@@ -23,6 +23,7 @@ import logging
 import traceback
 from typing import Dict
 from pathlib import Path
+from uuid import uuid4
 
 # MCP imports
 from mcp.server import Server
@@ -35,8 +36,10 @@ from .comutil import com
 from .constants import SwErrors
 from .config import get_config, save_config
 from .core.policy import OperationClass
+from .core.contracts import OperationError, OperationResult, OperationStatus
+from .core.evidence import OperationJournal
 from .core.session import TargetMismatchError
-from .registry import registered_tools, dispatch
+from .registry import registered_tools, dispatch, operation_class_for
 from .utils import get_solidworks_info, set_default_unit
 
 # Configure logging
@@ -56,6 +59,8 @@ logger = logging.getLogger("SolidWorksMCP")
 
 sw_automation = SolidWorksAutomation()
 server = Server("solidworks-mcp-server")
+operation_journal = OperationJournal()
+_operation_payloads: Dict[str, Dict] = {}
 
 _LEGACY_OPERATION_CLASSES = {
     "save_document": OperationClass.MUTATE,
@@ -98,10 +103,29 @@ def _execute_python_tool() -> Tool:
 # Tool Definitions
 # ============================================================================
 
+def _with_operation_id(tool_definition: Tool) -> Tool:
+    """Advertise the shared idempotency key without changing domain schemas."""
+    schema = dict(tool_definition.inputSchema)
+    properties = dict(schema.get("properties", {}))
+    properties["operation_id"] = {
+        "type": "string",
+        "minLength": 1,
+        "description": (
+            "Optional client idempotency key. Reusing it returns the recorded result "
+            "and never repeats the operation."
+        ),
+    }
+    schema["properties"] = properties
+    return Tool(
+        name=tool_definition.name,
+        description=tool_definition.description,
+        inputSchema=schema,
+    )
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available SolidWorks tools"""
-    return [
+    tools = [
         # Connection Tools
         Tool(
             name="connect_solidworks",
@@ -443,6 +467,7 @@ async def list_tools() -> list[Tool]:
             }
         ),
     ] + ([] if config.guarded_mode else [_execute_python_tool()]) + registered_tools()
+    return [_with_operation_id(tool_definition) for tool_definition in tools]
 
 
 # ============================================================================
@@ -459,6 +484,17 @@ def format_result(r: Dict) -> str:
     
     if r.get("data"):
         lines.append("Details: " + json.dumps(r["data"], indent=2))
+
+    if r.get("schema_version"):
+        lines.append("Operation: " + json.dumps({
+            "schema_version": r["schema_version"],
+            "operation_id": r["operation_id"],
+            "status": r["status"],
+            "target_before": r.get("target_before"),
+            "target_after": r.get("target_after"),
+            "warnings": r.get("warnings", []),
+            "errors": r.get("errors", []),
+        }, indent=2))
     
     return "\n".join(lines)
 
@@ -471,10 +507,26 @@ def format_result(r: Dict) -> str:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle MCP tool calls"""
     try:
+        arguments = dict(arguments or {})
+        operation_id = arguments.pop("operation_id", None) or str(uuid4())
+        replay = operation_journal.reserve(operation_id)
+        if replay is not None:
+            payload = _operation_payloads.get(operation_id)
+            if payload is None:
+                payload = replay.to_dict(legacy={
+                    "success": replay.status is OperationStatus.COMPLETED,
+                    "message": "Operation outcome is already recorded.",
+                    "error_code": 0 if replay.status is OperationStatus.COMPLETED else 1,
+                    "error_name": replay.status.value,
+                    "data": dict(replay.data),
+                })
+            return [TextContent(type="text", text=format_result(payload))]
+        operation_journal.mark_running(operation_id)
         logger.info(f"Tool: {name}, Args: {arguments}")
 
-        operation_class = _LEGACY_OPERATION_CLASSES.get(name)
+        operation_class = _LEGACY_OPERATION_CLASSES.get(name) or operation_class_for(name)
         target_before = None
+        guard_error = None
         if operation_class in {
             OperationClass.STATEFUL_READ,
             OperationClass.MUTATE,
@@ -493,10 +545,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     SwErrors.swInvalidInput,
                     {"code": detail.code, "retryable": detail.retryable},
                 )
-                return [TextContent(type="text", text=format_result(result))]
+                guard_error = result
         
         # Connection Tools
-        if name == "connect_solidworks":
+        if guard_error is not None:
+            result = guard_error
+
+        elif name == "connect_solidworks":
             result = sw_automation.connect()
         
         elif name == "get_solidworks_info":
@@ -721,26 +776,67 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     result = _execute_python_fixed(code)
         
         else:
-            result = dispatch(name, sw_automation, arguments)
+            result = dispatch(name, sw_automation, arguments, preflight=False)
             if result is None:
                 result = sw_automation._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError)
 
+        target_after = target_before
         if result.get("success"):
             if name in {"create_new_part", "create_new_assembly", "open_document"}:
-                sw_automation.bind_active_document()
+                target_after = sw_automation.bind_active_document()
+            elif name == "bind_active_document":
+                target_after = document
             elif (
                 target_before is not None
                 and operation_class is OperationClass.MUTATE
                 and name != "close_document"
                 and hasattr(sw_automation, "mark_active_document_mutated")
             ):
-                sw_automation.mark_active_document_mutated(target_before)
+                target_after = sw_automation.mark_active_document_mutated(target_before)
+
+        if result.get("success"):
+            operation_result = OperationResult(
+                operation_id=operation_id,
+                status=OperationStatus.COMPLETED,
+                target_before=target_before,
+                target_after=target_after,
+                data=dict(result.get("data", {})),
+            )
+        else:
+            detail = result.get("data", {})
+            operation_result = OperationResult(
+                operation_id=operation_id,
+                status=OperationStatus.FAILED,
+                target_before=target_before,
+                target_after=target_after,
+                data=dict(detail),
+                errors=(OperationError(
+                    code=detail.get("code", result.get("error_name", "COM_ERROR")),
+                    message=result.get("message", "Operation failed."),
+                    retryable=bool(detail.get("retryable", False)),
+                ),),
+            )
+        operation_journal.record(operation_result)
+        result = operation_result.to_dict(legacy=result)
+        _operation_payloads[operation_id] = result
         
         logger.info(f"Result: success={result['success']}")
         return [TextContent(type="text", text=format_result(result))]
         
     except Exception as e:
         logger.error(f"Tool error: {e}\n{traceback.format_exc()}")
+        if "operation_id" in locals():
+            failed = OperationResult.failed(operation_id, locals().get("target_before"), str(e))
+            operation_journal.record(failed)
+            payload = failed.to_dict(legacy={
+                "success": False,
+                "message": str(e),
+                "error_code": int(SwErrors.swUnknownError),
+                "error_name": SwErrors.swUnknownError.name,
+                "data": {},
+            })
+            _operation_payloads[operation_id] = payload
+            return [TextContent(type="text", text=format_result(payload))]
         return [TextContent(type="text", text=f"[ERROR] {e}")]
 
 

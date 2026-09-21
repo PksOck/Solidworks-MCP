@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import Enum
 import json
 import os
 from pathlib import Path
@@ -11,29 +12,64 @@ from typing import Any, Iterable
 from .contracts import OperationResult
 
 
+class JournalState(str, Enum):
+    PLANNED = "planned"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
 class OperationJournal:
     """Record one result per client operation id, including unknown outcomes."""
 
     def __init__(self) -> None:
         self._results: dict[str, OperationResult] = {}
+        self._states: dict[str, JournalState] = {}
 
     def get(self, operation_id: str) -> OperationResult | None:
         return self._results.get(operation_id)
+
+    def get_state(self, operation_id: str) -> JournalState | None:
+        return self._states.get(operation_id)
+
+    def reserve(self, operation_id: str) -> OperationResult | None:
+        """Reserve a new id, or return the safe replay for a duplicate."""
+        existing = self.get(operation_id)
+        if existing is not None:
+            return existing
+        state = self.get_state(operation_id)
+        if state in {JournalState.PLANNED, JournalState.RUNNING}:
+            return OperationResult.unknown(
+                operation_id, None, f"Operation is already {state.value}; its outcome is not yet known."
+            )
+        self._states[operation_id] = JournalState.PLANNED
+        return None
+
+    def mark_running(self, operation_id: str) -> None:
+        if self.get_state(operation_id) is not JournalState.PLANNED:
+            raise ValueError("Only a planned operation can transition to running.")
+        self._states[operation_id] = JournalState.RUNNING
 
     def record(self, result: OperationResult) -> OperationResult:
         existing = self._results.get(result.operation_id)
         if existing is not None:
             return existing
         self._results[result.operation_id] = result
+        self._states[result.operation_id] = JournalState(result.status.value)
         return result
 
     def run(self, operation_id: str, callback: Callable[[], OperationResult]) -> OperationResult:
         """Execute an operation once; never replay a known or unknown outcome."""
 
-        existing = self.get(operation_id)
-        if existing is not None:
-            return existing
-        result = callback()
+        replay = self.reserve(operation_id)
+        if replay is not None:
+            return replay
+        self.mark_running(operation_id)
+        try:
+            result = callback()
+        except Exception as error:
+            result = OperationResult.failed(operation_id, None, str(error))
         if result.operation_id != operation_id:
             raise ValueError("Callback result operation_id does not match requested operation_id.")
         return self.record(result)

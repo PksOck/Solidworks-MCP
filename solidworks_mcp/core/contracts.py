@@ -108,7 +108,18 @@ class OperationResult:
             operation_id=operation_id,
             status=OperationStatus.UNKNOWN,
             target_after=target_after,
-            errors=(OperationError("outcome_unknown", message, retryable=False),),
+            errors=(OperationError("OPERATION_OUTCOME_UNKNOWN", message, retryable=False),),
+        )
+
+    @classmethod
+    def failed(
+        cls, operation_id: str, target_after: DocumentRef | None, message: str
+    ) -> "OperationResult":
+        return cls(
+            operation_id=operation_id,
+            status=OperationStatus.FAILED,
+            target_after=target_after,
+            errors=(OperationError("COM_ERROR", message, retryable=False),),
         )
 
     def to_dict(self, legacy: Mapping[str, Any] | None = None) -> dict[str, Any]:
