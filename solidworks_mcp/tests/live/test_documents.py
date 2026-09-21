@@ -14,6 +14,7 @@ from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
+from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
@@ -351,6 +352,35 @@ class LiveDocumentTargetTests(unittest.TestCase):
         extrusion = self.automation.extrude_sketch(10, False, "mm")
         self.assertTrue(extrusion["success"], extrusion["message"])
         return part_title
+
+    def test_save_part_and_drawing_with_views_into_output_root(self):
+        root = Path(self.automation._path_policy.output_roots[0])
+        part_path = root / "saved" / "mcp_live_pipeline_part.SLDPRT"
+        drawing_path = root / "saved" / "mcp_live_pipeline_drawing.SLDDRW"
+
+        part_title = self._new_part_with_extrusion()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+
+        saved_part = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved_part["success"], saved_part["message"])
+        self.assertTrue(part_path.is_file())
+        self.assertGreater(part_path.stat().st_size, 0)
+        self.created_titles.append(str(com(part, "GetTitle")))
+
+        self._new_drawing("A4")
+        drawing, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        model_name = str(com(part, "GetTitle"))
+        self.assertTrue(com(drawing, "Create3rdAngleViews2", model_name),
+                        "Could not create the standard views for the saved part.")
+
+        saved_drawing = save_document(self.automation, path=str(drawing_path))
+        self.assertTrue(saved_drawing["success"], saved_drawing["message"])
+        self.assertTrue(drawing_path.is_file())
+        self.assertGreater(drawing_path.stat().st_size, 0)
+        self.assertEqual("drawing", saved_drawing["data"]["document_type"])
+        self.created_titles.append(str(com(drawing, "GetTitle")))
 
     def test_auto_balloon_scratch_drawing_view_without_saving(self):
         part_title = self._new_part_with_extrusion()
