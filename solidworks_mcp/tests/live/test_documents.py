@@ -1,3 +1,4 @@
+import math
 import os
 import unittest
 from pathlib import Path
@@ -16,7 +17,8 @@ from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature,
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.sheetmetal import (
-    create_sheet_metal_base_flange, export_flat_pattern, get_sheet_metal_info,
+    create_sheet_metal_base_flange, export_flat_pattern,
+    flatten_sheet_metal, get_flat_pattern_info, get_sheet_metal_info,
 )
 from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
 from solidworks_mcp.tools.weldments import create_structural_member, list_weldment_profiles
@@ -309,6 +311,16 @@ class LiveDocumentTargetTests(unittest.TestCase):
             total += com(body, "GetMassProperties", 0.0)[3] * 1e9
         return total
 
+    def _find_feature_type(self, document, type_name):
+        feature = com(document, "FirstFeature")
+        retained = []
+        while feature is not None:
+            retained.append(feature)
+            if com(feature, "GetTypeName2") == type_name:
+                return com(feature, "Name")
+            feature = com(feature, "GetNextFeature")
+        return None
+
     def _last_sketch_name(self, document):
         name = None
         retained = []
@@ -367,6 +379,62 @@ class LiveDocumentTargetTests(unittest.TestCase):
         extrusion = self.automation.extrude_sketch(10, False, "mm")
         self.assertTrue(extrusion["success"], extrusion["message"])
         return part_title
+
+    def test_sheet_metal_flat_pattern_flatten_and_export(self):
+        root = Path(self.automation._path_policy.output_roots[0])
+        part_path = root / "saved" / "mcp_live_sheetmetal_bend.SLDPRT"
+        dxf_path = root / "saved" / "mcp_live_bend_flat_pattern.dxf"
+
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        self.assertTrue(self.automation.draw_line(0, 0, 100, 0, "mm")["success"])
+        flange = create_sheet_metal_base_flange(self.automation, 2.0,
+                                               bend_radius_mm=1.0, width_mm=100.0)
+        self.assertTrue(flange["success"], flange["message"])
+
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+
+        # SolidWorks only creates the Flat-Pattern feature once the body has a
+        # bend, so the test induces one. The edge-flange API returns None while
+        # still registering the bend, which is why the Flat-Pattern feature is
+        # the thing observed here.
+        body = (com(document, "GetBodies2", 0, True) or [None])[0]
+        edge = next(edge for edge in com(body, "GetEdges") or []
+                    if com(com(edge, "GetCurve"), "IsLine"))
+        empty = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        edge_array = win32com.client.VARIANT(
+            pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [edge])
+        sketch_array = win32com.client.VARIANT(
+            pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [])
+        com(com(document, "FeatureManager"), "InsertSheetMetalEdgeFlange2",
+            edge_array, sketch_array, 0, math.radians(90.0), 0.001, 0, 0.02,
+            0, 0.0, 0.0, 0.0, 0, empty)
+        com(document, "EditRebuild3")
+        self.assertIsNotNone(self._find_feature_type(document, "FlatPattern"),
+                             "No Flat-Pattern feature was created.")
+
+        # Stateful flat-pattern reads are refused while the part is unsaved.
+        refused = get_flat_pattern_info(self.automation)
+        self.assertFalse(refused["success"])
+
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.created_titles.append(str(com(document, "GetTitle")))
+
+        info = get_flat_pattern_info(self.automation)
+        self.assertTrue(info["success"], info["message"])
+        self.assertAlmostEqual(100.0, info["data"]["length_mm"], places=2)
+        self.assertAlmostEqual(100.0, info["data"]["width_mm"], places=2)
+        self.assertAlmostEqual(2.0, info["data"]["height_mm"], places=2)
+
+        self.assertTrue(flatten_sheet_metal(self.automation, True)["success"])
+        self.assertTrue(flatten_sheet_metal(self.automation, False)["success"])
+
+        exported = export_flat_pattern(self.automation, str(dxf_path))
+        self.assertTrue(exported["success"], exported["message"])
+        self.assertGreater(dxf_path.stat().st_size, 0)
 
     def test_create_sheet_metal_base_flange_and_export_flat_pattern(self):
         root = Path(self.automation._path_policy.output_roots[0])
