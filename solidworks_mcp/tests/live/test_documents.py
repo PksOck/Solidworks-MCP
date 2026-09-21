@@ -11,6 +11,8 @@ from solidworks_mcp.tools.assembly import list_mates
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.export import export_step, export_stl
 from solidworks_mcp.tools.history import redo, undo
+from solidworks_mcp.tools.inspection import list_planes
+from solidworks_mcp.tools.reference_geometry import create_reference_plane
 from solidworks_mcp.tools.views import capture_view
 
 
@@ -210,6 +212,27 @@ class LiveDocumentTargetTests(unittest.TestCase):
         redo_result = redo(self.automation)
         self.assertTrue(redo_result["success"], redo_result["message"])
         self.assertIn("Extrusion", self._top_level_feature_types())
+        active, error = self.automation.capture_active_document_ref()
+        self.assertIsNone(error)
+        self.assertIsNone(active.path)
+
+    def test_create_offset_reference_plane_on_scratch_part_without_saving(self):
+        self._new_part()
+        before = list_planes(self.automation)
+        self.assertTrue(before["success"], before["message"])
+
+        result = create_reference_plane(
+            self.automation, "Front Plane", 25, "mm"
+        )
+
+        self.assertTrue(result["success"], result["message"])
+        after = list_planes(self.automation)
+        self.assertTrue(after["success"], after["message"])
+        self.assertEqual(
+            len(before["data"]["planes"]) + 1,
+            len(after["data"]["planes"]),
+        )
+        self.assertEqual("reference", after["data"]["planes"][-1]["kind"])
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
