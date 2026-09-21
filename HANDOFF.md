@@ -6,7 +6,7 @@ Updated: 2026-09-21
 
 - Repository: `C:\Users\Jan\Documents\Claude-Solidworks mcp`
 - Branch: `additional-upgrades`
-- Latest implementation commit: `fca4676` (`feat: add ten verified sketch entity tools`)
+- Latest implementation commit: `d4a084b` (`feat: add tangent arc and arc slot sketch entities`)
 - Do not push to a remote unless the user explicitly asks.
 - SolidWorks 2025 SP1.1 must be running for the opt-in live COM tests.
 
@@ -40,7 +40,7 @@ ordered backlog:
 
 | Milestone | Content | Status |
 |---|---|---|
-| M1.1 | Sketch entities | partial: 10 of ~22 tools done |
+| M1.1 | Sketch entities | partial: 13 of ~22 tools done |
 | M1.2 | Sketch editing (fillet, chamfer, offset, convert, split, mirror, sketch patterns) | not started |
 | M1.3 | Sketch relations and dimensions | not started |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
@@ -62,15 +62,20 @@ Implementation:
 Tools: `draw_centerline`, `draw_point`, `draw_circle_radius`,
 `draw_center_rectangle`, `draw_rectangle_3point_corner`,
 `draw_rectangle_3point_center`, `draw_parallelogram`, `draw_ellipse`,
-`draw_elliptical_arc`, `draw_parabola`.
+`draw_elliptical_arc`, `draw_parabola`, `draw_tangent_arc`, `draw_arc_slot`,
+`draw_arc_slot_3point`.
 
 Contract:
 
 - all coordinates are converted with the explicit `unit` argument; positive
-  radii/sides are validated before any COM access
-- non-coordinate COM arguments (the elliptical arc `Direction` int16) are passed
-  outside unit conversion, otherwise `1` becomes `0.001` and the call fails
+  radii/widths are validated before any COM access
+- non-coordinate COM arguments (the elliptical arc `Direction` int16, the slot
+  creation and length types, the tangent arc `ArcType`) are passed outside unit
+  conversion, otherwise `1` becomes `0.001` and the call fails; `_create_entity`
+  therefore takes separate `leading` and `trailing` argument lists
 - success requires a non-`None` sketch entity from `ISketchManager`
+- `draw_tangent_arc` fixes `ArcType` at 0: a live probe showed 0-3 all produce
+  an identical arc, so the flag is not exposed
 
 Verification:
 
@@ -79,9 +84,10 @@ $env:SW_MCP_LIVE_TESTS='1'
 .venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_entities -v
 ```
 
-Result: 2 passed. Every entity was drawn in its own scratch sketch on a scratch
+Result: 3 passed. Every entity was drawn in its own scratch sketch on a scratch
 part and verified by `ISketch` counts (`GetSketchSegments`, `GetEllipseCount`,
-`GetParabolaCount`, `GetUserPointsCount`); the part stayed unsaved.
+`GetParabolaCount`, `GetUserPointsCount`, `GetSketchSlotCount`); the part stayed
+unsaved.
 
 Full regression command:
 
@@ -89,7 +95,7 @@ Full regression command:
 .venv\Scripts\python.exe -m unittest discover -s solidworks_mcp\tests -v
 ```
 
-Result: 268 tests run, 26 skipped, 0 failures.
+Result: 275 tests run, 27 skipped, 0 failures.
 
 ## Current capability register
 
@@ -99,8 +105,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 77 requirements —
-62 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked.
+Status after this slice: 80 requirements —
+65 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(40 verified live).
 
 ## Remaining absent capabilities
 
@@ -113,8 +120,8 @@ Status after this slice: 77 requirements —
 
 Recommended next items, in the plan's order:
 
-1. finish M1.1: `draw_tangent_arc` (confirm `ArcType` values live), `draw_arc_slot`,
-   `draw_arc_slot_3point`, `draw_equation_curve`
+1. `draw_equation_curve` — confirm `CreateEquationSpline`/`CreateEquationSpline2`
+   parameter semantics live before exposing them
 2. M1.2 sketch editing: `CreateFillet`, `CreateChamfer`, `SketchOffset2`,
    `SketchUseEdge3`, `SketchMirror`, `SplitOpenSegment`,
    `CreateLinearSketchStepAndRepeat`, `CreateCircularSketchStepAndRepeat`
@@ -145,6 +152,8 @@ Always use explicit `git add -- <files>` rather than `git add .`.
 ## Recent local commits
 
 ```text
+d4a084b feat: add tangent arc and arc slot sketch entities
+b62204c docs: refresh handoff with the sketch entity slice and coverage plan
 fca4676 feat: add ten verified sketch entity tools
 557788a Fix three assembly defects found while building the gearbox test
 08d9865 feat: add neutral CAD import tool with 3D Interconnect handling
