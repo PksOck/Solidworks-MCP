@@ -21,7 +21,7 @@
   {"requirement_id":"3.6","category":"original_numbered","requested_behavior":"Shell feature","tool_name":"shell_feature","owner_phase":"R6-F"},
   {"requirement_id":"3.7","category":"original_numbered","requested_behavior":"Export STEP","tool_name":"export_step","owner_phase":"R6-X"},
   {"requirement_id":"3.8","category":"original_numbered","requested_behavior":"Export STL","tool_name":"export_stl","owner_phase":"R6-X"},
-  {"requirement_id":"3.9","category":"original_numbered","requested_behavior":"Generic DXF export","tool_name":"export_dxf","owner_phase":"R6-X"},
+  {"requirement_id":"3.9","category":"original_numbered","requested_behavior":"Generic DXF export","tool_name":"export_face_to_dxf","implementation_symbols":["export_face_to_dxf","export_flat_pattern"],"implementation_status":"superseded","verification_status":"current_live","evidence":["User decision: keep the proven explicit planar-face and sheet-metal DXF tools; do not add a generic Save As router"],"next_action":"none","owner_phase":"R6-X"},
   {"requirement_id":"3.10","category":"original_numbered","requested_behavior":"Create reference plane","tool_name":"create_reference_plane","owner_phase":"R6-M"},
   {"requirement_id":"4.1","category":"original_numbered","requested_behavior":"Create assembly","tool_name":"create_new_assembly","owner_phase":"R6-A"},
   {"requirement_id":"4.2","category":"original_numbered","requested_behavior":"Insert assembly component","tool_name":"insert_component","owner_phase":"R6-A"},
