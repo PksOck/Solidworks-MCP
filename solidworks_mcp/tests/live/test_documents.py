@@ -1,0 +1,53 @@
+import os
+import unittest
+
+from solidworks_mcp.automation import SolidWorksAutomation
+from solidworks_mcp.core.session import TargetMismatchError
+
+
+@unittest.skipUnless(
+    os.environ.get("SW_MCP_LIVE_TESTS") == "1",
+    "Set SW_MCP_LIVE_TESTS=1 to run SolidWorks COM tests.",
+)
+class LiveDocumentTargetTests(unittest.TestCase):
+    def setUp(self):
+        self.automation = SolidWorksAutomation()
+        result = self.automation.connect()
+        if not result["success"]:
+            self.skipTest(result["message"])
+        self.created_titles = []
+
+    def tearDown(self):
+        for title in reversed(self.created_titles):
+            try:
+                self.automation.app.CloseDoc(title)
+            except Exception:
+                pass
+
+    def _new_part(self):
+        result = self.automation.create_new_part()
+        self.assertTrue(result["success"], result["message"])
+        title = result["data"]["name"]
+        self.created_titles.append(title)
+        return title
+
+    def test_focus_change_rejects_old_target_until_explicit_rebind(self):
+        first_title = self._new_part()
+        first = self.automation.bind_active_document()
+        second_title = self._new_part()
+
+        with self.assertRaises(TargetMismatchError) as raised:
+            self.automation.require_bound_active_document()
+
+        self.assertEqual("WRONG_DOCUMENT", raised.exception.operation_error.code)
+        second = self.automation.bind_active_document()
+        current = self.automation.require_bound_active_document()
+        self.assertEqual(second.document_id, current.document_id)
+        self.assertNotEqual(first.document_id, second.document_id)
+        self.assertNotEqual(first_title, second_title)
+        self.assertIsNone(first.path)
+        self.assertIsNone(second.path)
+
+
+if __name__ == "__main__":
+    unittest.main()

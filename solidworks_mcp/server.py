@@ -34,6 +34,8 @@ from .automation import SolidWorksAutomation
 from .comutil import com
 from .constants import SwErrors
 from .config import get_config, save_config
+from .core.policy import OperationClass
+from .core.session import TargetMismatchError
 from .registry import registered_tools, dispatch
 from .utils import get_solidworks_info, set_default_unit
 
@@ -54,6 +56,28 @@ logger = logging.getLogger("SolidWorksMCP")
 
 sw_automation = SolidWorksAutomation()
 server = Server("solidworks-mcp-server")
+
+_LEGACY_OPERATION_CLASSES = {
+    "save_document": OperationClass.MUTATE,
+    "close_document": OperationClass.MUTATE,
+    "create_sketch": OperationClass.MUTATE,
+    "create_sketch_on_face": OperationClass.MUTATE,
+    "draw_line": OperationClass.MUTATE,
+    "draw_circle": OperationClass.MUTATE,
+    "draw_rectangle": OperationClass.MUTATE,
+    "draw_arc": OperationClass.MUTATE,
+    "draw_polygon": OperationClass.MUTATE,
+    "draw_spline": OperationClass.MUTATE,
+    "draw_arc_3point": OperationClass.MUTATE,
+    "draw_slot": OperationClass.MUTATE,
+    "extrude_sketch": OperationClass.MUTATE,
+    "cut_extrude": OperationClass.MUTATE,
+    "revolve_sketch": OperationClass.MUTATE,
+    "fillet_edges": OperationClass.MUTATE,
+    "chamfer_edges": OperationClass.MUTATE,
+    "close_sketch": OperationClass.MUTATE,
+    "execute_python": OperationClass.RAW_EXECUTION,
+}
 
 
 def _execute_python_tool() -> Tool:
@@ -92,6 +116,14 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_capabilities",
             description="Report the currently advertised tools, guarded-mode state, and known blocked capabilities.",
+            inputSchema={"type": "object", "properties": {}, "required": []}
+        ),
+        Tool(
+            name="bind_active_document",
+            description=(
+                "Explicitly bind the current SolidWorks ActiveDoc and configuration "
+                "as the target for subsequent mutating operations."
+            ),
             inputSchema={"type": "object", "properties": {}, "required": []}
         ),
         
@@ -440,6 +472,28 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle MCP tool calls"""
     try:
         logger.info(f"Tool: {name}, Args: {arguments}")
+
+        operation_class = _LEGACY_OPERATION_CLASSES.get(name)
+        target_before = None
+        if operation_class in {
+            OperationClass.STATEFUL_READ,
+            OperationClass.MUTATE,
+            OperationClass.EXPORT,
+        }:
+            try:
+                if sw_automation.has_bound_document():
+                    target_before = sw_automation.require_bound_active_document()
+                else:
+                    target_before = sw_automation.bind_active_document()
+            except TargetMismatchError as error:
+                detail = error.operation_error
+                result = sw_automation._result(
+                    False,
+                    str(error),
+                    SwErrors.swInvalidInput,
+                    {"code": detail.code, "retryable": detail.retryable},
+                )
+                return [TextContent(type="text", text=format_result(result))]
         
         # Connection Tools
         if name == "connect_solidworks":
@@ -487,6 +541,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     "blocked_capabilities": blocked,
                 }
             }
+
+        elif name == "bind_active_document":
+            document = sw_automation.bind_active_document()
+            result = sw_automation._result(
+                True,
+                "Active document bound to this MCP session.",
+                SwErrors.swSuccess,
+                document.to_dict(),
+            )
         
         # Document Tools
         elif name == "create_new_part":
@@ -661,6 +724,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = dispatch(name, sw_automation, arguments)
             if result is None:
                 result = sw_automation._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError)
+
+        if result.get("success"):
+            if name in {"create_new_part", "create_new_assembly", "open_document"}:
+                sw_automation.bind_active_document()
+            elif (
+                target_before is not None
+                and operation_class is OperationClass.MUTATE
+                and name != "close_document"
+                and hasattr(sw_automation, "mark_active_document_mutated")
+            ):
+                sw_automation.mark_active_document_mutated(target_before)
         
         logger.info(f"Result: success={result['success']}")
         return [TextContent(type="text", text=format_result(result))]
