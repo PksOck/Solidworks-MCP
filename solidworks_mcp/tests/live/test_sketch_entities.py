@@ -2,9 +2,9 @@
 
 One scratch part is built in an explicit sequence: one step per entity tool,
 each step owning its own zone of the sketch plane, each step screenshotted
-before the part is closed.  The sequence ends with a plate profile that is
-extruded; its measured volume proves that the whole profile (outline *and*
-holes) was used, not just the first loop.
+before the part is closed.  An equation-driven curve follows, then a plate
+profile that is extruded; the plate's measured volume proves that the whole
+profile (outline *and* holes) was used, not just the first loop.
 """
 
 import math
@@ -13,8 +13,8 @@ import unittest
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_entities import (
     draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
-    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_parallelogram,
-    draw_parabola, draw_point, draw_rectangle_3point_center,
+    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_equation_curve,
+    draw_parallelogram, draw_parabola, draw_point, draw_rectangle_3point_center,
     draw_rectangle_3point_corner, draw_tangent_arc,
 )
 
@@ -36,7 +36,8 @@ class LiveSketchEntityTests(ScratchPartTestCase):
             with self.subTest(step=index, purpose=purpose):
                 self._step(index, purpose, plane, calls, expectations)
 
-        self._plate_step(len(cases) + 1)
+        self._equation_curve_step(len(cases) + 1)
+        self._plate_step(len(cases) + 2)
         self.assert_unsaved()
 
     def _step(self, index, purpose, plane, calls, expectations):
@@ -166,6 +167,45 @@ class LiveSketchEntityTests(ScratchPartTestCase):
         return cases
 
     # -- the piece itself --------------------------------------------------
+    def _equation_curve_step(self, index):
+        """y = 8*sin(x) over one period; the arc length pins the scale.
+
+        SolidWorks evaluates both the range and the expression in the document
+        unit, so the expected length is the arc length of y = 8*sin(x) with x in
+        millimetres.  A metre interpretation would be off by a factor of 1000.
+        """
+        ox, oy = zone(1, 5)
+        amplitude = 8.0
+        sketch = self.new_sketch("Front")
+        result = draw_equation_curve(
+            self.automation, f"{amplitude}*sin(x)", ox, ox + 2 * math.pi,
+            y_offset=oy, unit="mm")
+        self.assertTrue(result["success"], result["message"])
+        self.exit_sketch()
+
+        steps = 20000
+        span = 2 * math.pi
+        expected = sum(
+            math.sqrt(1 + (amplitude * math.cos(step * span / steps)) ** 2)
+            * span / steps
+            for step in range(steps)
+        )
+
+        data = result["data"]
+        self.assertEqual(1, self.segment_count(sketch))
+        self.assertEqual(1, data["spline_count"])
+        self.assertEqual("mm", data["document_unit"])
+        self.assertAlmostEqual(expected, data["curve_length"],
+                               delta=expected * 0.005)
+        # The range starts at x = ox, so the curve starts at sin(ox), not at 0.
+        self.assertAlmostEqual(ox, data["endpoints"][0][0], places=4)
+        self.assertAlmostEqual(oy + amplitude * math.sin(ox),
+                               data["endpoints"][0][1], delta=1e-3)
+        self.assertAlmostEqual(ox + span, data["endpoints"][1][0], places=3)
+        self.assertAlmostEqual(oy + amplitude * math.sin(ox + span),
+                               data["endpoints"][1][1], delta=1e-3)
+        self.capture(index, "equation driven curve")
+
     def _plate_step(self, index):
         """One closed plate profile with five holes, then a boss extrusion."""
         ox, oy = PLATE_ZONE

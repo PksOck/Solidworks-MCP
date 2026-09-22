@@ -1,3 +1,4 @@
+import math
 import types
 import unittest
 
@@ -6,8 +7,8 @@ from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_entities import (
     draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
-    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_parallelogram,
-    draw_parabola, draw_point, draw_rectangle_3point_center,
+    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_equation_curve,
+    draw_parallelogram, draw_parabola, draw_point, draw_rectangle_3point_center,
     draw_rectangle_3point_corner, draw_tangent_arc,
 )
 
@@ -51,6 +52,7 @@ class SketchManager:
     def __init__(self, result=_DEFAULT_RESULT):
         self.result = object() if result is _DEFAULT_RESULT else result
         self.calls = []
+        self.document = None
 
     def __getattr__(self, name):
         if not name.startswith("Create"):
@@ -58,6 +60,8 @@ class SketchManager:
 
         def record(_bound_self, *args):
             self.calls.append((name, args))
+            if self.document is not None and name == "CreateEquationSpline":
+                self.document.segments.append(Segment(3))
             return self.result
 
         # Return a bound method, exactly like a real COM method wrapper:
@@ -65,9 +69,53 @@ class SketchManager:
         return types.MethodType(record, self)
 
 
+class Segment:
+    def __init__(self, kind):
+        self.kind = kind
+
+    def GetType(self):
+        return self.kind
+
+
+class SketchPoint:
+    def __init__(self, x, y, z=0.0):
+        self.X = x
+        self.Y = y
+        self.Z = z
+
+
+class Spline:
+    def __init__(self, length=0.0, points=()):
+        self.length = length
+        self.points = list(points)
+
+    def GetLength(self):
+        return self.length
+
+    def GetPoints2(self):
+        return list(self.points)
+
+
+class Sketch:
+    def __init__(self, document):
+        self.document = document
+
+    def GetSketchSegments(self):
+        return list(self.document.segments)
+
+
 class Document:
-    def __init__(self, sketch_result=_DEFAULT_RESULT):
+    def __init__(self, sketch_result=_DEFAULT_RESULT, linear_unit=0):
+        self.linear_unit = linear_unit
+        self.segments = []
         self.SketchManager = SketchManager(sketch_result)
+        self.SketchManager.document = self
+
+    def GetUnits(self):
+        return (self.linear_unit, 0)
+
+    def GetActiveSketch2(self):
+        return Sketch(self)
 
 
 class Units:
@@ -103,6 +151,17 @@ class SketchEntityRegistrationTests(unittest.TestCase):
         for name in EXPECTED_TOOLS:
             self.assertIn(name, tools)
             self.assertIs(OperationClass.MUTATE, operation_class_for(name))
+
+    def test_the_equation_curve_tool_is_registered_as_a_mutation(self):
+        tools = {item.name: item for item in registered_tools()}
+
+        self.assertIn("draw_equation_curve", tools)
+        self.assertIs(OperationClass.MUTATE,
+                      operation_class_for("draw_equation_curve"))
+        properties = tools["draw_equation_curve"].inputSchema["properties"]
+        self.assertEqual(["mm", "cm", "m", "inch"], properties["unit"]["enum"])
+        self.assertEqual(["expression", "range_start", "range_end"],
+                         tools["draw_equation_curve"].inputSchema["required"])
 
     def test_unit_argument_accepts_the_documented_units(self):
         tools = {item.name: item for item in registered_tools()}
@@ -333,6 +392,86 @@ class TangentArcAndSlotBehaviorTests(unittest.TestCase):
         self.assertFalse(point_result["success"])
         self.assertEqual([], zero_width.document.SketchManager.calls)
         self.assertEqual([], coincident.document.SketchManager.calls)
+
+
+class EquationCurveTests(unittest.TestCase):
+    """The live call takes the range in the document unit and the offsets in
+    metres; the measured evidence is in docs/api-findings.md section 26."""
+
+    @staticmethod
+    def sine():
+        return Spline(0.0076404, [SketchPoint(0.0, 0.0), SketchPoint(0.0062832, 0.0)])
+
+    def test_range_uses_the_document_unit_while_the_offsets_use_metres(self):
+        document = Document(self.sine(), linear_unit=3)  # an inch document
+        automation = Automation(document)
+
+        result = draw_equation_curve(automation, "sin(x)", 0, 25.4, x_offset=1,
+                                     y_offset=2, unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        method, arguments = document.SketchManager.calls[0]
+        self.assertEqual("CreateEquationSpline", method)
+        self.assertEqual("sin(x)", arguments[0])
+        self.assertAlmostEqual(0.0, arguments[1], places=9)
+        self.assertAlmostEqual(1.0, arguments[2], places=9)  # 25.4 mm = 1 inch
+        self.assertIs(False, arguments[3])
+        self.assertAlmostEqual(0.0, arguments[4], places=9)
+        self.assertAlmostEqual(0.001, arguments[5], places=9)  # 1 mm in metres
+        self.assertAlmostEqual(0.002, arguments[6], places=9)
+        self.assertEqual("inch", result["data"]["document_unit"])
+        self.assertEqual([0.0, 1.0], result["data"]["range_in_document_unit"])
+
+    def test_rotation_is_radians_and_measurements_come_back_in_the_unit(self):
+        document = Document(self.sine(), linear_unit=0)
+        automation = Automation(document)
+
+        result = draw_equation_curve(automation, "sin(x)", 0, 6.2831853,
+                                     rotation_deg=90, unit="mm")
+
+        _method, arguments = document.SketchManager.calls[0]
+        self.assertAlmostEqual(math.pi / 2, arguments[4], places=12)
+        self.assertAlmostEqual(7.6404, result["data"]["curve_length"], places=4)
+        self.assertEqual([[0.0, 0.0, 0.0], [6.2832, 0.0, 0.0]],
+                         result["data"]["endpoints"])
+        self.assertEqual(1, result["data"]["spline_count"])
+
+    def test_bad_input_is_rejected_before_any_com_call(self):
+        cases = (
+            {"expression": "   "},
+            {"range_start": 1, "range_end": 1},
+            {"range_start": "0"},
+            {"rotation_deg": None},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                automation = Automation()
+                call = {"expression": "sin(x)", "range_start": 0, "range_end": 1}
+                call.update(overrides)
+
+                result = draw_equation_curve(automation, **call)
+
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+                self.assertEqual([], automation.document.SketchManager.calls)
+
+    def test_an_unsupported_document_unit_is_reported(self):
+        automation = Automation(Document(linear_unit=5))  # feet and inches
+
+        result = draw_equation_curve(automation, "sin(x)", 0, 10)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("UNSUPPORTED_DOCUMENT_UNIT", result["data"]["code"])
+
+    def test_a_curve_that_adds_no_spline_is_a_failure(self):
+        automation = Automation()
+        automation.document.segments.append(Segment(3))
+        automation.document.SketchManager.document = None
+
+        result = draw_equation_curve(automation, "sin(x)", 0, 10)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("EQUATION_CURVE_FAILED", result["data"]["code"])
 
 
 if __name__ == "__main__":

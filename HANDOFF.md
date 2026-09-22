@@ -40,7 +40,7 @@ ordered backlog:
 
 | Milestone | Content | Status |
 |---|---|---|
-| M1.1 | Sketch entities | 21 of 22 tools done and live-verified in one sequence (`draw_equation_curve` missing) |
+| M1.1 | Sketch entities | done: 21 entity tools plus the equation-driven curve, all live-verified in one sequence |
 | M1.2 | Sketch editing | slices 1–3 done: fillet, chamfer, offset, mirror, split, linear and circular patterns, scale, construction toggle, rotate |
 | M1.3 | Sketch relations and dimensions | not started |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
@@ -121,11 +121,11 @@ part, via `solidworks_mcp/tests/live/_scratch.py`
   `SW_MCP_KEEP_REVIEW=1`
 - trim and extend moved here out of `tests/live/test_documents.py`
 
-Current shape: `test_sketch_entities.py` = 21 entity steps + a plate profile
-+ the extrusion (23 screenshots); `test_sketch_edit.py` = 23 edit and pattern
-steps (23 screenshots). The step that rotates a profile and extrudes it is the
-rigorous one: it asserts the 40x20 profile **swaps its axes** in `GetBodyBox`,
-which no length-based check can see.
+Current shape: `test_sketch_entities.py` = 21 entity steps + the equation-driven
+curve + a plate profile + the extrusion (24 screenshots); `test_sketch_edit.py`
+= 23 edit and pattern steps (23 screenshots). The step that rotates a profile
+and extrudes it is the rigorous one: it asserts the 40x20 profile **swaps its
+axes** in `GetBodyBox`, which no length-based check can see.
 
 When a step ends in a feature, prove success by **volume**, not by body count:
 a single sketch with several closed loops extrudes all of them, but a body count
@@ -154,9 +154,36 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 91 requirements —
-76 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(51 verified live).
+Status after this slice: 92 requirements —
+77 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(52 verified live).
+
+## Equation-driven curve (M1.1, finished)
+
+`draw_equation_curve` lives in `solidworks_mcp/tools/sketch_entities.py` and
+wraps `ISketchManager.CreateEquationSpline` (the 2D `y = f(x)` form; the 3D
+`CreateEquationSpline2` needs a 3D sketch and waits for M1.4).
+
+The trap is mixed units, measured live and recorded in `docs/api-findings.md`
+section 26:
+
+- `RangeStart` / `RangeEnd` and the expression are evaluated in the **document
+  linear unit**, not in metres. Proven by the arc length: `sin(x)` over
+  `0..2*pi` reports `7.640390 mm`, which is the analytic 7.6403956 in
+  millimetres. A metre interpretation would report 7640 mm.
+- `XOffset` / `YOffset` are **metres**, like every other length in the API.
+- `RotationAngle` is radians, counter-clockwise about the sketch origin.
+- The tool reads the document unit with `IModelDoc2.GetUnits()` (first element
+  is `swLengthUnit_e`), converts the range into it and the offsets into metres,
+  and returns `UNSUPPORTED_DOCUMENT_UNIT` rather than guessing for a unit it
+  does not know.
+- Reading a curve back: `ISketchSpline.GetPoints2()` returns two
+  `ISketchPoint`s (start and end, in metres) and `GetPointCount()` returns 2;
+  `GetStartPoint`/`GetEndPoint` do not exist on a spline even though
+  `GetLength` does.
+
+The live step draws `8*sin(x)` and compares the reported length with a
+20000-step arc-length integral (0.5 % tolerance), so a unit mistake cannot pass.
 
 ## Remaining absent capabilities
 
@@ -185,12 +212,11 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. `draw_equation_curve` — confirm `CreateEquationSpline`/`CreateEquationSpline2`
-   parameter semantics live before exposing them
-2. M1.3 sketch relations and dimensions (`SketchAddConstraints`,
+1. M1.3 sketch relations and dimensions (`SketchAddConstraints`,
    `SketchConstraintsDel`, `InsertSketchText`, `AddDimension2` on a sketch)
-3. M1.4 sketching on model geometry — this is also what unblocks
-   `convert_entities` (`SketchUseEdge3` needs model edges selected)
+2. M1.4 sketching on model geometry — this is also what unblocks
+   `convert_entities` (`SketchUseEdge3` needs model edges selected) and the 3D
+   `CreateEquationSpline2`
 
 ## Known traps (do not relearn)
 
@@ -220,6 +246,12 @@ Recommended next items, in the plan's order:
   sketch normal. A "no change" read from segment coordinates is therefore not
   evidence that these calls failed — look at the screen too (this exact trap
   cost a long detour; the user spotted the rotation on screen).
+- `ISketchSpline.GetPoints2()` returns two `ISketchPoint`s (curve start and end,
+  in metres); `GetStartPoint`/`GetEndPoint` do not exist on a spline even
+  though `GetLength` does.
+- `CreateEquationSpline` takes the range **and** evaluates the expression in the
+  document linear unit, but takes `XOffset`/`YOffset` in **metres**. Mixing
+  these up shows as a factor-of-1000 curve, not as an error.
 - A sketch that is created and exited **without geometry is deleted again**.
   Read the sketch name right after `create_sketch`, never after exiting it.
 - Setting a COM property needs a plain attribute assignment (`comutil.set_com`);

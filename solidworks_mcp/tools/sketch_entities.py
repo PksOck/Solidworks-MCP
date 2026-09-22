@@ -3,8 +3,8 @@ Sketch entity tools for the active 2D sketch.
 
 Covers the primitive entities that the legacy server tools do not expose:
 centerline, sketch point, radius circle, rectangle variants, parallelogram,
-ellipse, elliptical arc and parabola. Every call is a mutation on the active
-sketch, so each tool declares OperationClass.MUTATE.
+ellipse, elliptical arc, parabola and the equation-driven curve. Every call is
+a mutation on the active sketch, so each tool declares OperationClass.MUTATE.
 
 The SolidWorks signatures were read from sldworks.tlb (ISketchManager), not
 guessed; see docs/api-findings.md section 0.
@@ -530,5 +530,174 @@ def draw_parabola(sw, focus_x: float, focus_y: float, apex_x: float, apex_y: flo
             "apex": [apex_x, apex_y],
             "start": [start_x, start_y],
             "end": [end_x, end_y],
+        },
+    )
+
+
+# swLengthUnit_e from swconst.tlb, mapped to metres per unit.
+_LINEAR_UNIT_FACTORS = {
+    0: (0.001, "mm"),
+    1: (0.01, "cm"),
+    2: (1.0, "m"),
+    3: (0.0254, "inch"),
+    4: (0.3048, "foot"),
+    6: (1.0e-10, "angstrom"),
+    7: (1.0e-9, "nanometre"),
+    8: (1.0e-6, "micron"),
+    9: (2.54e-5, "mil"),
+    10: (2.54e-8, "microinch"),
+}
+
+
+def _document_linear_unit(document):
+    """(metres per unit, unit name) for the document's linear unit."""
+    try:
+        units = com(document, "GetUnits")
+    except Exception:  # noqa: BLE001
+        return None, None
+    if not units:
+        return None, None
+    return _LINEAR_UNIT_FACTORS.get(int(units[0]), (None, None))
+
+
+def _spline_count(document):
+    sketch = com(document, "GetActiveSketch2")
+    if sketch is None:
+        return None
+    return sum(
+        1
+        for segment in list(com(sketch, "GetSketchSegments") or [])
+        if int(com(segment, "GetType")) == 3
+    )
+
+
+def _curve_points(spline, unit_factor):
+    """The two stored curve endpoints, converted to metres then to the unit."""
+    points = []
+    for point in list(com(spline, "GetPoints2") or []):
+        points.append([
+            round(float(com(point, member)) / unit_factor, 6)
+            for member in ("X", "Y", "Z")
+        ])
+    return points
+
+
+@tool(
+    name="draw_equation_curve",
+    description=(
+        "Draw an equation-driven curve y = f(x) in the active sketch. The "
+        "expression uses x and is evaluated in the document's linear unit; "
+        "SolidWorks keeps it as a closed-form spline. range_start and "
+        "range_end are given in the requested unit and converted to the "
+        "document unit, while the offsets are applied in the sketch plane. A "
+        "positive rotation turns the curve counter-clockwise about the "
+        "sketch origin."
+    ),
+    schema={"type": "object", "properties": {
+        "expression": {"type": "string"},
+        "range_start": {"type": "number"},
+        "range_end": {"type": "number"},
+        "rotation_deg": {"type": "number", "default": 0},
+        "x_offset": {"type": "number", "default": 0},
+        "y_offset": {"type": "number", "default": 0},
+        "lock_start": {"type": "boolean", "default": False},
+        "lock_end": {"type": "boolean", "default": False},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["expression", "range_start", "range_end"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_equation_curve(sw, expression: str, range_start: float,
+                        range_end: float, rotation_deg: float = 0,
+                        x_offset: float = 0, y_offset: float = 0,
+                        lock_start: bool = False, lock_end: bool = False,
+                        unit: str = "mm") -> dict:
+    if not isinstance(expression, str) or not expression.strip():
+        return _invalid(sw, "expression must be a non-empty equation in x.")
+    if any(not _is_number(value)
+           for value in (range_start, range_end, rotation_deg, x_offset,
+                         y_offset)):
+        return _invalid(sw, "The range, rotation and offsets must be finite "
+                            "numbers.")
+    if range_start == range_end:
+        return _invalid(sw, "range_start and range_end must differ.")
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    document_factor, document_unit = _document_linear_unit(document)
+    if document_factor is None:
+        return sw._result(
+            False,
+            "The document uses a linear unit this tool cannot convert; set "
+            "the document to mm, cm, m or inch first.",
+            SwErrors.swSketchError,
+            {"code": "UNSUPPORTED_DOCUMENT_UNIT"},
+        )
+    try:
+        start_meters = sw._units.to_meters(range_start, unit)
+        end_meters = sw._units.to_meters(range_end, unit)
+        x_offset_meters = sw._units.to_meters(x_offset, unit)
+        y_offset_meters = sw._units.to_meters(y_offset, unit)
+    except (KeyError, TypeError, ValueError) as conversion_error:
+        return _invalid(sw, f"Invalid unit or value: {conversion_error}")
+
+    splines_before = _spline_count(document)
+    try:
+        spline = com(
+            com(document, "SketchManager"), "CreateEquationSpline",
+            expression,
+            start_meters / document_factor,
+            end_meters / document_factor,
+            False,
+            math.radians(rotation_deg),
+            x_offset_meters,
+            y_offset_meters,
+            bool(lock_start),
+            bool(lock_end),
+        )
+    except Exception as create_error:
+        return sw._result(
+            False, f"Equation curve failed: {create_error}",
+            SwErrors.swSketchError,
+        )
+    if spline is None:
+        return sw._result(
+            False,
+            "Equation curve failed. Ensure a sketch is active and the "
+            "expression is valid.",
+            SwErrors.swSketchError,
+        )
+
+    splines_after = _spline_count(document)
+    if splines_before is not None and splines_after is not None \
+            and splines_after <= splines_before:
+        return sw._result(
+            False,
+            "Equation curve failed: no new spline appeared in the sketch.",
+            SwErrors.swSketchError,
+            {"code": "EQUATION_CURVE_FAILED"},
+        )
+
+    factor = sw._units.to_meters(1.0, unit)
+    return sw._result(
+        True,
+        f"Equation curve '{expression}' created from {range_start} to "
+        f"{range_end}{unit}.",
+        SwErrors.swSuccess,
+        {
+            "expression": expression,
+            "range": [range_start, range_end],
+            "range_in_document_unit": [
+                round(start_meters / document_factor, 6),
+                round(end_meters / document_factor, 6),
+            ],
+            "document_unit": document_unit,
+            "rotation_deg": rotation_deg,
+            "offsets": [x_offset, y_offset],
+            "unit": unit,
+            "curve_length": round(float(com(spline, "GetLength")) / factor, 6),
+            "endpoints": _curve_points(spline, factor),
+            "spline_count": splines_after,
+            "sketch_method": "CreateEquationSpline",
         },
     )
