@@ -9,7 +9,7 @@ from solidworks_mcp.tools.sketch_entities import (
     draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
     draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_equation_curve,
     draw_parallelogram, draw_parabola, draw_point, draw_rectangle_3point_center,
-    draw_rectangle_3point_corner, draw_tangent_arc,
+    draw_rectangle_3point_corner, draw_sketch_text, draw_tangent_arc,
 )
 
 
@@ -103,6 +103,17 @@ class Sketch:
     def GetSketchSegments(self):
         return list(self.document.segments)
 
+    def GetSketchTextSegments(self):
+        return list(self.document.text_segments)
+
+
+class SketchText:
+    def __init__(self, text):
+        self.text = text
+
+    def Text(self):
+        return self.text
+
 
 class Document:
     def __init__(self, sketch_result=_DEFAULT_RESULT, linear_unit=0):
@@ -110,6 +121,20 @@ class Document:
         self.segments = []
         self.SketchManager = SketchManager(sketch_result)
         self.SketchManager.document = self
+        self.text_calls = []
+        self.text_ok = True
+        self.text_registers = True
+        self.text_segments = []
+
+    def InsertSketchText(self, x, y, z, text, alignment, flip, mirror,
+                         width_factor, spacing):
+        self.text_calls.append((x, y, z, text, alignment, flip, mirror,
+                                width_factor, spacing))
+        if not self.text_ok:
+            return None
+        if self.text_registers:
+            self.text_segments.append(SketchText(text))
+        return SketchText(text)
 
     def GetUnits(self):
         return (self.linear_unit, 0)
@@ -472,6 +497,78 @@ class EquationCurveTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("EQUATION_CURVE_FAILED", result["data"]["code"])
+
+
+class SketchTextTests(unittest.TestCase):
+    def test_the_text_tool_is_registered_as_a_mutation(self):
+        tools = {item.name: item for item in registered_tools()}
+
+        self.assertIn("draw_sketch_text", tools)
+        self.assertIs(OperationClass.MUTATE,
+                      operation_class_for("draw_sketch_text"))
+        properties = tools["draw_sketch_text"].inputSchema["properties"]
+        self.assertEqual(["mm", "cm", "m", "inch"], properties["unit"]["enum"])
+        self.assertEqual(["text"],
+                         tools["draw_sketch_text"].inputSchema["required"])
+
+    def test_the_point_is_converted_and_the_text_read_back(self):
+        automation = Automation()
+
+        result = draw_sketch_text(automation, "Hello", x=10, y=-5, unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual((0.01, -0.005, 0.0, "Hello", 2, 0, 0, 100, 100),
+                         automation.document.text_calls[0])
+        self.assertEqual("Hello", result["data"]["stored_text"])
+        self.assertTrue(result["data"]["read_back_matches"])
+        self.assertEqual(1, result["data"]["text_segment_count"])
+
+    def test_text_that_solidworks_does_not_record_is_a_failure(self):
+        automation = Automation()
+        automation.document.text_registers = False
+
+        result = draw_sketch_text(automation, "Hello")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("TEXT_NOT_ADDED", result["data"]["code"])
+
+    def test_defaults_are_millimetres_and_the_verified_alignment(self):
+        automation = Automation()
+
+        result = draw_sketch_text(automation, "x")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(2, automation.document.text_calls[0][4])
+        self.assertEqual(0.0, automation.document.text_calls[0][0])
+
+    def test_bad_input_is_rejected_before_any_com_call(self):
+        cases = (
+            {"text": ""},
+            {"text": "   "},
+            {"text": 5},
+            {"text": "x", "alignment_code": 4},
+            {"text": "x", "alignment_code": -1},
+            {"text": "x", "alignment_code": True},
+            {"text": "x", "x": "a"},
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                automation = Automation()
+
+                result = draw_sketch_text(automation, **arguments)
+
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+                self.assertEqual([], automation.document.text_calls)
+
+    def test_text_solidworks_refuses_is_a_failure(self):
+        automation = Automation()
+        automation.document.text_ok = False
+
+        result = draw_sketch_text(automation, "Hello")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(1, len(automation.document.text_calls))
 
 
 if __name__ == "__main__":

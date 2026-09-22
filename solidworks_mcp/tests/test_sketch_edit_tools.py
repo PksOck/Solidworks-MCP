@@ -4,9 +4,9 @@ import unittest
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_edit import (
-    add_sketch_relation, delete_sketch_relations, get_sketch_relations,
-    offset_entities, rotate_entities, scale_entities, sketch_chamfer,
-    sketch_fillet, sketch_mirror, sketch_pattern_circular,
+    add_sketch_dimension, add_sketch_relation, delete_sketch_relations,
+    get_sketch_relations, offset_entities, rotate_entities, scale_entities,
+    sketch_chamfer, sketch_fillet, sketch_mirror, sketch_pattern_circular,
     sketch_pattern_linear, split_entities, toggle_construction,
 )
 
@@ -159,6 +159,59 @@ class SketchManager:
         return True
 
 
+class Dimension:
+    def __init__(self, document, segment):
+        self.document = document
+        self.segment = segment
+        self.system_value = 0.0
+
+    def SetSystemValue2(self, value, which_configurations):
+        self.system_value = value
+        if self.document.driven_dimension:
+            return 3
+        if self.segment is not None:
+            # Live behaviour: a driving length dimension resizes the segment.
+            self.segment.length = value * 1000.0
+        return 0
+
+    @property
+    def SystemValue(self):
+        return self.system_value
+
+    def FullName(self):
+        return "D1@Sketch1@Part1.Part"
+
+    def ReadOnly(self):
+        return self.document.driven_dimension
+
+
+class DisplayDimension:
+    def __init__(self, document, segment):
+        self.dimension = Dimension(document, segment)
+
+    def GetDimension(self):
+        return self.dimension
+
+
+class RunningCommand:
+    def __init__(self, name=None, command_id=-3):
+        self.name = name
+        self.command_id = command_id
+        self.preferences = {10: True}
+        self.preference_calls = []
+
+    def GetRunningCommandInfo(self):
+        return (self.command_id, self.name or "", False)
+
+    def GetUserPreferenceToggle(self, preference):
+        return self.preferences[preference]
+
+    def SetUserPreferenceToggle(self, preference, value):
+        self.preference_calls.append((preference, value))
+        self.preferences[preference] = value
+        return None
+
+
 class Feature:
     def __init__(self, name, sketch_object, next_feature=None):
         self.Name = name
@@ -233,6 +286,7 @@ class Document:
         self.SelectionManager = SelectionManager(self)
         self.SketchManager = SketchManager(self, changes)
         self.edit_calls = 0
+        self.rebuild_calls = []
         self.insert_sketch_calls = []
         self.clear_calls = []
         self.mirror_calls = 0
@@ -243,6 +297,18 @@ class Document:
         self.relation_manager = RelationManager(self)
         self.points_by_name = {"Point1": Segment(0.0, type_code=2)}
         self.constraint_calls = []
+        self.dimension_calls = []
+        self.display_dimension = None
+        self.dimension_ok = True
+        self.driven_dimension = False
+
+    def AddDimension2(self, x, y, z):
+        self.dimension_calls.append((x, y, z))
+        if not self.dimension_ok:
+            return None
+        segment = self.selected[-1] if self.selected else None
+        self.display_dimension = DisplayDimension(self, segment)
+        return self.display_dimension
 
     def SketchAddConstraints(self, constraint_string):
         self.constraint_calls.append(constraint_string)
@@ -257,6 +323,10 @@ class Document:
     def EditSketch(self):
         self.edit_calls += 1
         return None
+
+    def EditRebuild3(self):
+        self.rebuild_calls.append(True)
+        return True
 
     def GetActiveSketch2(self):
         return self.sketch.sketch_object
@@ -304,6 +374,7 @@ class Automation:
         self.document = document or Document()
         self._units = Units()
         self.units = self._units
+        self.app = RunningCommand()
         self.active_doc_calls = 0
 
     def get_active_doc(self):
@@ -332,6 +403,7 @@ class RegistrationTests(unittest.TestCase):
             "sketch_mirror", "split_entities", "sketch_pattern_linear",
             "sketch_pattern_circular", "scale_entities", "toggle_construction",
             "rotate_entities", "add_sketch_relation", "delete_sketch_relations",
+            "add_sketch_dimension",
         ):
             with self.subTest(tool=name):
                 self.assertIn(name, tools)
@@ -1025,6 +1097,144 @@ class SketchRelationTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("RELATION_NOT_DELETED", result["data"]["code"])
+
+
+class SketchDimensionTests(unittest.TestCase):
+    def test_a_driving_dimension_resizes_the_line(self):
+        automation = Automation()
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([(0.03, 0.005, 0.0)],
+                         automation.document.dimension_calls)
+        self.assertEqual(30.0, automation.document.segments[0].length)
+        self.assertTrue(result["data"]["geometry_changed"])
+        self.assertEqual(30.0, result["data"]["dimension_value"])
+        self.assertEqual("D1@Sketch1@Part1.Part",
+                         result["data"]["dimension_name"])
+        self.assertFalse(result["data"]["read_only"])
+
+    def test_the_dimension_is_committed_with_a_rebuild(self):
+        automation = Automation()
+
+        add_sketch_dimension(automation, "Sketch1", ["Line1"], 30, 5,
+                             value=30, unit="mm")
+
+        # One rebuild commits the dimension, the second applies the value.
+        self.assertEqual(2, len(automation.document.rebuild_calls))
+
+    def test_the_input_dialog_preference_is_disabled_then_restored(self):
+        automation = Automation()
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([(10, False), (10, True)],
+                         automation.app.preference_calls)
+        self.assertTrue(automation.app.preferences[10])
+
+    def test_the_input_dialog_preference_is_restored_when_creation_fails(self):
+        automation = Automation()
+        automation.document.dimension_ok = False
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual([(10, False), (10, True)],
+                         automation.app.preference_calls)
+        self.assertTrue(automation.app.preferences[10])
+
+    def test_placing_a_dimension_without_a_value_succeeds(self):
+        automation = Automation()
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertFalse(result["data"]["geometry_changed"])
+        self.assertIsNone(result["data"]["value"])
+        self.assertEqual(0.0, automation.document
+                         .display_dimension.dimension.system_value)
+        self.assertEqual(50.0, automation.document.segments[0].length)
+
+    def test_a_driven_dimension_is_reported_precisely(self):
+        automation = Automation()
+        automation.document.driven_dimension = True
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DIMENSION_VALUE_REJECTED", result["data"]["code"])
+        self.assertEqual("driven_dimension",
+                         result["data"]["set_value_status"])
+
+    def test_a_leftover_running_command_is_never_success(self):
+        automation = Automation()
+        automation.app.name = "Dimension"
+        automation.app.command_id = 17
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DIMENSION_NOT_COMMITTED", result["data"]["code"])
+        self.assertEqual("Dimension", result["data"]["running_command"])
+
+    def test_the_stale_edit_sketch_report_is_not_a_failure(self):
+        # SolidWorks reports the just-closed sketch as a running "Edit Sketch"
+        # command; that is not a dialog waiting for the user.
+        automation = Automation()
+        automation.app.name = "Edit Sketch"
+        automation.app.command_id = 17
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+
+    def test_a_dimension_that_solidworks_does_not_create_fails(self):
+        automation = Automation()
+        automation.document.dimension_ok = False
+
+        result = add_sketch_dimension(automation, "Sketch1", ["Line1"],
+                                      30, 5, value=30, unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DIMENSION_FAILED", result["data"]["code"])
+
+    def test_validation_happens_before_com(self):
+        cases = (
+            {"entities": ["Line1"], "x": 30, "y": 5, "value": 0},
+            {"entities": ["Line1"], "x": 30, "y": 5, "value": -1},
+            {"entities": ["Line1"], "x": "a", "y": 5},
+            {"entities": ["Line1", "Line2", "Arc1"], "x": 30, "y": 5},
+            {"entities": ["Line1", "Line1"], "x": 30, "y": 5},
+            {"entities": [], "x": 30, "y": 5},
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                automation = Automation()
+
+                result = add_sketch_dimension(automation, "Sketch1",
+                                              **arguments)
+
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+                self.assertEqual([], automation.document.dimension_calls)
+
+    def test_an_unknown_sketch_fails_without_touching_the_model(self):
+        automation = Automation()
+
+        result = add_sketch_dimension(automation, "Nope", ["Line1"], 30, 5,
+                                      value=30, unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual([], automation.document.dimension_calls)
 
 
 if __name__ == "__main__":

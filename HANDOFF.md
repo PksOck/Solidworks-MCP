@@ -42,7 +42,7 @@ ordered backlog:
 |---|---|---|
 | M1.1 | Sketch entities | done: 21 entity tools plus the equation-driven curve, all live-verified in one sequence |
 | M1.2 | Sketch editing | slices 1–3 done: fillet, chamfer, offset, mirror, split, linear and circular patterns, scale, construction toggle, rotate |
-| M1.3 | Sketch relations and dimensions | relations done (add/list/delete/status); dimensions and sketch text next |
+| M1.3 | Sketch relations, dimensions and text | done (add/list/delete/status/dimension/text) |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
 | M2 | Part features, bodies, reference geometry, attributes | in progress from older work |
 | M3 | Surface modeling | not started |
@@ -122,8 +122,9 @@ part, via `solidworks_mcp/tests/live/_scratch.py`
 - trim and extend moved here out of `tests/live/test_documents.py`
 
 Current shape: `test_sketch_entities.py` = 21 entity steps + the equation-driven
-curve + a plate profile + the extrusion (24 screenshots); `test_sketch_edit.py`
-= 25 edit, pattern and relation steps (25 screenshots). The step that rotates a
+curve + sketch text + a plate profile + the extrusion (25 screenshots);
+`test_sketch_edit.py` = 26 edit, pattern, relation and dimension steps
+(26 screenshots). The step that rotates a
 profile and extrudes it is the rigorous one: it asserts the 40x20 profile
 **swaps its axes** in `GetBodyBox`, which no length-based check can see.
 
@@ -154,9 +155,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 96 requirements —
-81 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(56 verified live).
+Status after M1.3: 98 requirements —
+83 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(58 verified live).
 
 ## Sketch relations (M1.3, slice 1)
 
@@ -237,11 +238,7 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M1.3 remainder: `add_sketch_dimension` (recipe already verified:
-   `AddDimension2` then `EditRebuild3` then
-   `GetDimension().SetSystemValue2(value, 0)` then `EditRebuild3` again) and
-   `draw_sketch_text` (`InsertSketchText` works and returns `ISketchText`)
-2. M1.4 sketching on model geometry — this is also what unblocks
+1. M1.4 sketching on model geometry — this is also what unblocks
    `convert_entities` (`SketchUseEdge3` needs model edges selected) and the 3D
    `CreateEquationSpline2`
 
@@ -279,13 +276,13 @@ Recommended next items, in the plan's order:
 - `CreateEquationSpline` takes the range **and** evaluates the expression in the
   document linear unit, but takes `XOffset`/`YOffset` in **metres**. Mixing
   these up shows as a factor-of-1000 curve, not as an error.
-- `IModelDoc2.AddDimension2` (and `AddAlongXDimension`) leave the **Dimension
-  command running** - `ISldWorks.GetRunningCommandInfo` returns
-  `(17, 'Dimension', True)` and SolidWorks waits for the user to confirm.
-  `EditRebuild3` immediately after the call commits the dimension and clears the
-  command (`(-3, '', False)`); that is the only way found to add a sketch
-  dimension without manual confirmation. Always rebuild right after
-  `AddDimension2`.
+- `IModelDoc2.AddDimension2` opens the dimension-value prompt when the global
+  user preference `swInputDimValOnCreate` (10) is true. `EditRebuild3` is **not**
+  the fix: it can make `GetRunningCommandInfo` report idle while the user still
+  has to confirm. The verified no-dialog recipe is: save the preference, set it
+  false, call `AddDimension2`, and restore it in `finally`; then use
+  `IDimension.SetSystemValue2(value_m, 0)` and rebuild. Official API Help says
+  to use this preference specifically to suppress the input dialog.
 - `ISketchRelationManager.AddRelation` throws `com_error` in SW 2025 and
   `GetAllowedRelations` returns `None`; add relations with
   `IModelDoc2.SketchAddConstraints("sg...")` instead.

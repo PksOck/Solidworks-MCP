@@ -701,3 +701,106 @@ def draw_equation_curve(sw, expression: str, range_start: float,
             "sketch_method": "CreateEquationSpline",
         },
     )
+
+
+def _sketch_text_count(document):
+    """How many text segments the active sketch holds, or None if unreadable.
+
+    ``ISketch.GetSketchTextSegments`` is the durable record of inserted text:
+    live it returns one type-4 segment per text, while open or closed.  Note
+    that ``GetActiveSketch2`` returns ``None`` right after an ``EditRebuild3``.
+    """
+    try:
+        sketch = com(document, "GetActiveSketch2")
+        if sketch is None:
+            return None
+        return len(list(com(sketch, "GetSketchTextSegments") or []))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@tool(
+    name="draw_sketch_text",
+    description=(
+        "Insert sketch text at a point in the active sketch. The text is stored "
+        "as an ISketchText object, read back, and the sketch's text segment "
+        "count must grow, so the result is proven rather than assumed. The "
+        "point is given in the requested unit. alignment_code is passed "
+        "straight through to SolidWorks (the live test uses 2) and the width "
+        "factor and character spacing are the verified 100/100 percentages."
+    ),
+    schema={"type": "object", "properties": {
+        "text": {"type": "string"},
+        "x": {"type": "number", "default": 0},
+        "y": {"type": "number", "default": 0},
+        "alignment_code": {"type": "integer", "minimum": 0, "maximum": 3,
+                           "default": 2},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["text"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_sketch_text(sw, text, x=0, y=0, alignment_code=2, unit="mm"):
+    if not isinstance(text, str) or not text.strip():
+        return _invalid(sw, "text must be a non-empty string.")
+
+    if (not isinstance(alignment_code, int) or isinstance(alignment_code, bool)
+            or not 0 <= alignment_code <= 3):
+        return _invalid(sw, "alignment_code must be an integer from 0 to 3.")
+
+    meters, conversion_error = _convert_coordinates(sw, unit, [x, y])
+    if conversion_error:
+        return conversion_error
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+
+    before = _sketch_text_count(document)
+
+    try:
+        sketch_text = com(
+            document, "InsertSketchText", meters[0], meters[1], 0.0, text,
+            alignment_code, 0, 0, 100, 100,
+        )
+    except Exception as create_error:  # noqa: BLE001
+        return sw._result(False, f"Sketch text failed: {create_error}",
+                          SwErrors.swSketchError)
+
+    if sketch_text is None:
+        return sw._result(
+            False,
+            "Sketch text failed. Ensure a sketch is active.",
+            SwErrors.swSketchError,
+        )
+
+    try:
+        stored = com(sketch_text, "Text")
+    except Exception:  # noqa: BLE001
+        stored = None
+
+    after = _sketch_text_count(document)
+    if before is not None and after is not None and after <= before:
+        return sw._result(
+            False,
+            f"SolidWorks did not record the sketch text {text!r}; the sketch "
+            f"still holds {after} text segment(s).",
+            SwErrors.swSketchError,
+            {"code": "TEXT_NOT_ADDED", "text_segment_count": after},
+        )
+
+    return sw._result(
+        True,
+        f"Inserted the sketch text {text!r} at ({x}, {y}) {unit}.",
+        SwErrors.swSuccess,
+        {
+            "text": text,
+            "stored_text": stored,
+            "read_back_matches": stored == text,
+            "x": x,
+            "y": y,
+            "alignment_code": alignment_code,
+            "unit": unit,
+            "text_segment_count": after,
+            "sketch_method": "InsertSketchText",
+        },
+    )

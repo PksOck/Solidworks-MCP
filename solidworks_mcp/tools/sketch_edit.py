@@ -1652,3 +1652,211 @@ def delete_sketch_relations(sw, sketch, relation=None, all=False):
         },
     )
 
+
+# swSetValueReturnStatus_e.
+SET_VALUE_STATUS = {
+    0: "success",
+    1: "failure",
+    2: "invalid_value",
+    3: "driven_dimension",
+    4: "model_not_loaded",
+    5: "frozen_feature_owner",
+}
+
+# swUserPreferenceToggle_e.swInputDimValOnCreate.  SOLIDWORKS API Help for
+# IModelDoc2.AddDimension2 explicitly recommends disabling this preference to
+# suppress the dialog that asks the user to enter the new dimension value.
+SW_INPUT_DIM_VALUE_ON_CREATE = 10
+
+
+# SolidWorks keeps reporting the just-finished sketch as the running
+# "Edit Sketch" command after InsertSketch2, so that name means nothing.
+# Measured in SW 2025 SP1.1: idle is (-3, '', False), a committed dimension is
+# (-3, '', False), an uncommitted one is (17, 'Dimension', True) and the stale
+# sketch report is (17, 'Edit Sketch', True).  The command id is 17 in both
+# running cases, so the name is what distinguishes them.
+IGNORED_RUNNING_COMMANDS = frozenset({"Edit Sketch"})
+
+
+def _running_command(sw):
+    """The SolidWorks command that is still waiting for the user, if any.
+
+    ``AddDimension2`` leaves the Dimension command running until the user
+    confirms; an immediate ``EditRebuild3`` commits it and clears this.
+    """
+    try:
+        info = com(sw.app, "GetRunningCommandInfo")
+    except Exception:  # noqa: BLE001
+        return None
+    if not info:
+        return None
+    values = list(info) + [None, None, None]
+    command_id, command_name = values[0], values[1]
+    name = str(command_name).strip() if command_name else ""
+    if not name or name in IGNORED_RUNNING_COMMANDS:
+        return None
+    return (command_id, name)
+
+
+@tool(
+    name="add_sketch_dimension",
+    description=(
+        "Add a driving dimension to one or two entities of a named sketch, at "
+        "the given label position, and optionally set its value. The dimension "
+        "is committed with an immediate rebuild, so SolidWorks is never left "
+        "waiting for a manual confirmation. Setting a value resizes the "
+        "geometry; a dimension SolidWorks makes reference-only is reported as "
+        "DRIVEN_DIMENSION."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"},
+                     "minItems": 1, "maxItems": 2},
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "value": {"type": "number"},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["sketch", "entities", "x", "y"]},
+    operation_class=OperationClass.MUTATE,
+)
+def add_sketch_dimension(sw, sketch, entities, x, y, value=None, unit="mm"):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    names = _clean_names(entities)
+    if names is None or len(names) > 2:
+        return _invalid(sw, "entities must be one or two distinct non-empty "
+                            "entity names.")
+
+    if not _is_number(x) or not _is_number(y):
+        return _invalid(sw, "The label position must be two finite numbers.")
+
+    value_meters = None
+    if value is not None:
+        value_meters, error = _convert_length(sw, value, unit, "value")
+        if error:
+            return error
+        if value_meters <= 0:
+            return _invalid(sw, "value must be greater than zero.")
+
+    x_meters, error = _convert_length(sw, x, unit, "x")
+    if error:
+        return error
+    y_meters, error = _convert_length(sw, y, unit, "y")
+    if error:
+        return error
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    captured = {}
+
+    def apply(_context):
+        old_input_prompt = bool(com(
+            sw.app, "GetUserPreferenceToggle", SW_INPUT_DIM_VALUE_ON_CREATE))
+        try:
+            com(sw.app, "SetUserPreferenceToggle",
+                SW_INPUT_DIM_VALUE_ON_CREATE, False)
+            display = com(document, "AddDimension2", x_meters, y_meters, 0.0)
+        finally:
+            # This is a global SOLIDWORKS user preference, not a document
+            # setting.  Always restore it, including when AddDimension2 fails.
+            com(sw.app, "SetUserPreferenceToggle",
+                SW_INPUT_DIM_VALUE_ON_CREATE, old_input_prompt)
+        if display is None:
+            return None
+        captured["display"] = display
+        # Rebuild after creation and again after assigning the driving value.
+        # The preference above, not this rebuild, suppresses the input dialog.
+        com(document, "EditRebuild3")
+        if value_meters is None:
+            return display
+        dimension = com(display, "GetDimension")
+        if dimension is None:
+            return None
+        captured["dimension"] = dimension
+        captured["set_status"] = int(
+            com(dimension, "SetSystemValue2", value_meters, 0))
+        com(document, "EditRebuild3")
+        return dimension
+
+    changed = _edit_and_verify(
+        sw, document, feature, names,
+        action="dimension",
+        call=apply,
+        failure_code="DIMENSION_FAILED",
+        failure_label="Sketch dimension",
+    )
+    if isinstance(changed, dict):
+        return changed
+
+    # A command that is still running means SolidWorks is waiting for the user
+    # to confirm; that must never be reported as success.
+    pending = _running_command(sw)
+    if pending is not None:
+        return sw._result(
+            False,
+            f"SolidWorks is still running the {pending[1]} command; the "
+            "dimension was not committed.",
+            SwErrors.swFeatureError,
+            {"code": "DIMENSION_NOT_COMMITTED", "running_command": pending[1]},
+        )
+
+    status = captured.get("set_status")
+    if value_meters is not None and status != 0:
+        return sw._result(
+            False,
+            f"SolidWorks refused the value: "
+            f"{SET_VALUE_STATUS.get(status, status)}.",
+            SwErrors.swFeatureError,
+            {"code": "DIMENSION_VALUE_REJECTED",
+             "set_value_status": SET_VALUE_STATUS.get(status, status)},
+        )
+
+    if value_meters is not None and not changed and len(names) == 1:
+        return sw._result(
+            False,
+            f"The {names[0]} dimension was accepted but the geometry did not "
+            "change, so it is not driving the sketch.",
+            SwErrors.swFeatureError,
+            {"code": "DIMENSION_DID_NOT_DRIVE"},
+        )
+
+    dimension = captured.get("dimension")
+    display = captured.get("display")
+    reported = {}
+    for label, source in (("value", dimension), ("display", display)):
+        if source is None:
+            continue
+        try:
+            if label == "value":
+                reported["dimension_value"] = round(
+                    float(com(source, "SystemValue")) / sw._units.to_meters(
+                        1.0, unit), 6)
+                reported["dimension_name"] = com(source, "FullName")
+                reported["read_only"] = bool(com(source, "ReadOnly"))
+            else:
+                reported["display_dimension"] = True
+        except Exception:  # noqa: BLE001
+            continue
+
+    return sw._result(
+        True,
+        f"Dimension added to {', '.join(names)} in {sketch}"
+        + (f" and set to {value}{unit}." if value_meters is not None
+           else " without changing its value."),
+        SwErrors.swSuccess,
+        {
+            "sketch": sketch,
+            "entities": names,
+            "label_position": [x, y],
+            "unit": unit,
+            "value": value,
+            "geometry_changed": changed,
+            **reported,
+        },
+    )

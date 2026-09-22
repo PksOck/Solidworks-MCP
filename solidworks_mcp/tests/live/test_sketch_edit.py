@@ -9,12 +9,14 @@ before the part is closed.  Trim and extend, which used to live in
 import math
 import unittest
 
+from solidworks_mcp.comutil import com
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_edit import (
-    add_sketch_relation, delete_sketch_relations, extend_entities,
-    get_sketch_relations, offset_entities, rotate_entities, scale_entities,
-    sketch_chamfer, sketch_fillet, sketch_mirror, sketch_pattern_circular,
-    sketch_pattern_linear, split_entities, toggle_construction, trim_entities,
+    add_sketch_dimension, add_sketch_relation, delete_sketch_relations,
+    extend_entities, get_sketch_relations, offset_entities, rotate_entities,
+    scale_entities, sketch_chamfer, sketch_fillet, sketch_mirror,
+    sketch_pattern_circular, sketch_pattern_linear, split_entities,
+    toggle_construction, trim_entities,
 )
 
 
@@ -85,6 +87,7 @@ class LiveSketchEditTests(ScratchPartTestCase):
             ("rotate a profile and extrude it", self._rotate_and_extrude),
             ("add, re-add and delete sketch relations", self._relations),
             ("relation added and status reported", self._relation_status),
+            ("driving dimension resizes a line and defines it", self._dimension),
         ]
 
     # -- fillet and chamfer ------------------------------------------------
@@ -400,6 +403,38 @@ class LiveSketchEditTests(ScratchPartTestCase):
         self.assertIn("fixed", after["data"]["relation_counts"])
         self.assertEqual("under_constrained", after["data"]["constrained_status"])
         self.assertFalse(after["data"]["fully_defined"])
+
+    def _dimension(self):
+        """A driving dimension resizes the line and makes the sketch defined.
+
+        The line starts at the sketch origin and is drawn with inference on
+        (exact_geometry=False), so it picks up the coincident and horizontal
+        relations; those plus the length dimension leave no degree of freedom,
+        which is what takes the status to fully constrained.
+        """
+        sketch = self.new_sketch(exact_geometry=False)
+        line = self.automation.draw_line(0, 0, 50, 0, "mm")
+        self.assertTrue(line["success"], line["message"])
+        self.exit_sketch()
+
+        before = self._result(get_sketch_relations(self.automation, sketch))
+        self.assertFalse(before["data"]["fully_defined"])
+
+        result = self._result(add_sketch_dimension(
+            self.automation, sketch, ["Line1"], 25, -15, value=30, unit="mm"))
+
+        self.assertTrue(result["data"]["geometry_changed"])
+        self.assertEqual(30.0, result["data"]["dimension_value"])
+        self.assertEqual([30.0], self.segment_lengths_mm(sketch))
+
+        after = self._result(get_sketch_relations(self.automation, sketch))
+        self.assertTrue(after["data"]["fully_defined"],
+                        after["data"]["constrained_status"])
+
+        # Nothing may be left waiting for the user to confirm.
+        command = com(self.automation.app, "GetRunningCommandInfo")
+        self.assertNotEqual("Dimension", str(command[1]).strip(),
+                            "SolidWorks is waiting for a dimension value")
 
     def _circular_top_plane(self):
         """A top-plane sketch is deliberately placed clear of the front grid."""

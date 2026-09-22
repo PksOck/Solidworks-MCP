@@ -10,12 +10,13 @@ profile (outline *and* holes) was used, not just the first loop.
 import math
 import unittest
 
+from solidworks_mcp.comutil import com
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_entities import (
     draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
     draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_equation_curve,
     draw_parallelogram, draw_parabola, draw_point, draw_rectangle_3point_center,
-    draw_rectangle_3point_corner, draw_tangent_arc,
+    draw_rectangle_3point_corner, draw_sketch_text, draw_tangent_arc,
 )
 
 
@@ -37,7 +38,8 @@ class LiveSketchEntityTests(ScratchPartTestCase):
                 self._step(index, purpose, plane, calls, expectations)
 
         self._equation_curve_step(len(cases) + 1)
-        self._plate_step(len(cases) + 2)
+        self._text_step(len(cases) + 2)
+        self._plate_step(len(cases) + 3)
         self.assert_unsaved()
 
     def _step(self, index, purpose, plane, calls, expectations):
@@ -205,6 +207,29 @@ class LiveSketchEntityTests(ScratchPartTestCase):
         self.assertAlmostEqual(oy + amplitude * math.sin(ox + span),
                                data["endpoints"][1][1], delta=1e-3)
         self.capture(index, "equation driven curve")
+
+    def _text_step(self, index):
+        """Sketch text: counted while open and again once the sketch is closed."""
+        ox, oy = zone(2, 5)
+        sketch = self.new_sketch("Front")
+
+        first = draw_sketch_text(self.automation, "SW MCP", ox, oy, unit="mm")
+        second = draw_sketch_text(self.automation, "M1.3", ox, oy - 20, unit="mm")
+
+        self.assertTrue(first["success"], first["message"])
+        self.assertTrue(second["success"], second["message"])
+        self.assertEqual(1, first["data"]["text_segment_count"])
+        self.assertEqual(2, second["data"]["text_segment_count"])
+        self.assertTrue(second["data"]["read_back_matches"])
+        self.assertEqual("M1.3", second["data"]["stored_text"])
+        self.capture(index, "sketch text")
+
+        self.exit_sketch()
+        # The text is a durable part of the sketch, not just a returned object.
+        segments = list(com(self.sketch(sketch), "GetSketchTextSegments") or [])
+        self.assertEqual(2, len(segments))
+        for segment in segments:
+            self.assertEqual(4, int(com(segment, "GetType")))
 
     def _plate_step(self, index):
         """One closed plate profile with five holes, then a boss extrusion."""
