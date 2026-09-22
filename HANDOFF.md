@@ -1,12 +1,12 @@
 # SolidWorks MCP development handoff
 
-Updated: 2026-09-21
+Updated: 2026-09-22
 
 ## Resume point
 
 - Repository: `C:\Users\Jan\Documents\Claude-Solidworks mcp`
 - Branch: `additional-upgrades`
-- Latest implementation commit: `d4a084b` (`feat: add tangent arc and arc slot sketch entities`)
+- Latest implementation commit: `29d9b8e` (`feat: add seven verified sketch editing tools`)
 - Do not push to a remote unless the user explicitly asks.
 - SolidWorks 2025 SP1.1 must be running for the opt-in live COM tests.
 
@@ -40,53 +40,49 @@ ordered backlog:
 
 | Milestone | Content | Status |
 |---|---|---|
-| M1.1 | Sketch entities | partial: 13 of ~22 tools done |
-| M1.2 | Sketch editing (fillet, chamfer, offset, convert, split, mirror, sketch patterns) | not started |
+| M1.1 | Sketch entities | partial: 13 of ~22 tools done (`draw_equation_curve` missing) |
+| M1.2 | Sketch editing | slice 1 done: fillet, chamfer, offset, mirror, split, linear and circular patterns |
 | M1.3 | Sketch relations and dimensions | not started |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
 | M2 | Part features, bodies, reference geometry, attributes | in progress from older work |
 | M3 | Surface modeling | not started |
 | M4 | Sheet metal, weldments, assembly, drawings, simulation | mixed |
 
-## Latest completed slice: sketch entities (M1.1)
+## Latest completed slice: sketch editing (M1.2 slice 1)
 
-Implementation:
+Implementation in `solidworks_mcp/tools/sketch_edit.py` (shared with trim and
+extend):
 
-- `solidworks_mcp/tools/sketch_entities.py` (new module, 10 tools)
-- registration import in `solidworks_mcp/tools/__init__.py`
-- unit tests in `solidworks_mcp/tests/test_sketch_entities.py`
-- live test in `solidworks_mcp/tests/live/test_sketch_entities.py`
-- live evidence in `scripts/capability_requirements.json`
-- findings in `docs/api-findings.md` section 22
-
-Tools: `draw_centerline`, `draw_point`, `draw_circle_radius`,
-`draw_center_rectangle`, `draw_rectangle_3point_corner`,
-`draw_rectangle_3point_center`, `draw_parallelogram`, `draw_ellipse`,
-`draw_elliptical_arc`, `draw_parabola`, `draw_tangent_arc`, `draw_arc_slot`,
-`draw_arc_slot_3point`.
+`sketch_fillet`, `sketch_chamfer`, `offset_entities`, `sketch_mirror`,
+`split_entities`, `sketch_pattern_linear`, `sketch_pattern_circular`.
 
 Contract:
 
-- all coordinates are converted with the explicit `unit` argument; positive
-  radii/widths are validated before any COM access
-- non-coordinate COM arguments (the elliptical arc `Direction` int16, the slot
-  creation and length types, the tangent arc `ArcType`) are passed outside unit
-  conversion, otherwise `1` becomes `0.001` and the call fails; `_create_entity`
-  therefore takes separate `leading` and `trailing` argument lists
-- success requires a non-`None` sketch entity from `ISketchManager`
-- `draw_tangent_arc` fixes `ArcType` at 0: a live probe showed 0-3 all produce
-  an identical arc, so the flag is not exposed
+- every tool reopens the named sketch, selects the entities by their exact
+  sketch segment names, runs one `ISketchManager`/`IModelDoc2` call, closes the
+  sketch and reports success **only when the sketch geometry changed**
+  (`_edit_and_verify(..., require_change=True)`); the API return value is not
+  trusted
+- non-length COM arguments (chamfer type, `CapEnds` int, angles) bypass unit
+  conversion; lengths go through `sw._units.to_meters`
+- `sketch_mirror` selects the mirror axis last and rejects an axis that is one
+  of the mirrored entities
+- `sketch_pattern_circular` takes the pattern **centre** and derives the two
+  arguments SolidWorks actually wants (`ArcRadius`, `ArcAngle`), reporting them
+  back; see `docs/api-findings.md` section 23.4 for the verified formula
+- `sketch_pattern_linear` defaults `angle_y_deg` to 90 so `count_y` produces a
+  real grid; with both angles 0 every instance lands on one line
 
 Verification:
 
 ```powershell
+.venv\Scripts\python.exe -m unittest solidworks_mcp.tests.test_sketch_edit_tools -v
 $env:SW_MCP_LIVE_TESTS='1'
-.venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_entities -v
+.venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_edit -v
 ```
 
-Result: 3 passed. Every entity was drawn in its own scratch sketch on a scratch
-part and verified by `ISketch` counts (`GetSketchSegments`, `GetEllipseCount`,
-`GetParabolaCount`, `GetUserPointsCount`, `GetSketchSlotCount`); the part stayed
+Result: 37 unit tests and 8 live COM tests green. The live tests prove the
+instance positions (arc centres) for both patterns and leave every scratch part
 unsaved.
 
 Full regression command:
@@ -95,7 +91,8 @@ Full regression command:
 .venv\Scripts\python.exe -m unittest discover -s solidworks_mcp\tests -v
 ```
 
-Result: 275 tests run, 27 skipped, 0 failures.
+Result: 320 tests run, 35 skipped, 0 failures (with
+`SW_MCP_LIVE_TESTS=1`: 320 run, 2 skipped, 0 failures).
 
 ## Current capability register
 
@@ -105,9 +102,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 80 requirements —
-65 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(40 verified live).
+Status after this slice: 87 requirements —
+72 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(47 verified live).
 
 ## Remaining absent capabilities
 
@@ -120,18 +117,32 @@ Status after this slice: 80 requirements —
 
 Recommended next items, in the plan's order:
 
-1. `draw_equation_curve` — confirm `CreateEquationSpline`/`CreateEquationSpline2`
+1. M1.2 remainder: `convert_entities` (`SketchUseEdge3`, needs model edge/face
+   selection), `move_entities` (`SketchModifyTranslate`, `SketchModifyRotate`,
+   `SketchModifyScale`, `SketchModifyFlip` — note that all four return `None`
+   except Scale, so success must be proven from geometry, and translate/rotate
+   keep the segment lengths unchanged), `toggle_construction`,
+   `repair_sketch`
+2. `draw_equation_curve` — confirm `CreateEquationSpline`/`CreateEquationSpline2`
    parameter semantics live before exposing them
-2. M1.2 sketch editing: `CreateFillet`, `CreateChamfer`, `SketchOffset2`,
-   `SketchUseEdge3`, `SketchMirror`, `SplitOpenSegment`,
-   `CreateLinearSketchStepAndRepeat`, `CreateCircularSketchStepAndRepeat`
-   (signature list already in `docs/api-findings.md` section 13)
+3. M1.3 sketch relations and dimensions
 
 ## Known traps (do not relearn)
 
 - `IModelDoc2.EditSketch` is void and returns `None` on success.
 - `SketchTrim` returns `False` for `swSketchTrimClosest` even when it trims;
   prove success by observed geometry change.
+- `SketchMirror()`, `SketchModifyTranslate`, `SketchModifyRotate` and
+  `SketchModifyFlip` all return `None` on success; `SketchModifyScale` returns
+  `True`.
+- A circular sketch pattern's centre is derived by SolidWorks as
+  `seed + ArcRadius * (cos ArcAngle, sin ArcAngle)`; `PatternSpacing` is an
+  angle in radians, and a positive spacing steps clockwise. Do not guess it —
+  see `docs/api-findings.md` section 23.4.
+- `ISketchSegment.GetCenterPoint`/`GetStartPoint`/`GetEndPoint` return
+  **sketch** coordinates, not model coordinates.
+- `IMathUtility.CreatePoint` + `IMathPoint.MultiplyTransform` is broken in this
+  build (returns the translation alone).
 - Leaveover unsaved `Part*` scratch documents wedge `create_sketch`/`draw_line`.
 - Non-coordinate COM arguments must not pass through unit conversion.
 - `capture_view` refuses to overwrite an existing file.
@@ -152,6 +163,8 @@ Always use explicit `git add -- <files>` rather than `git add .`.
 ## Recent local commits
 
 ```text
+29d9b8e feat: add seven verified sketch editing tools
+ed41f5f docs: record the tangent arc and arc slot slice in the handoff
 d4a084b feat: add tangent arc and arc slot sketch entities
 b62204c docs: refresh handoff with the sketch entity slice and coverage plan
 fca4676 feat: add ten verified sketch entity tools
@@ -175,8 +188,13 @@ f002312 feat: add verified sketch trim and extend
 git branch --show-current
 git status --short
 git log -5 --oneline
-.venv\Scripts\python.exe -m unittest discover -s solidworks_mcp\tests -v
 ```
 
 Expected branch is `additional-upgrades`. Confirm that only the user-owned files
 listed above are dirty before beginning another roadmap item.
+
+Test economy: run only the focused module(s) for the slice being changed
+(`python -m unittest solidworks_mcp.tests.<module> -v`) while iterating. Run the
+whole `discover` sweep once before committing, and do not enable
+`SW_MCP_LIVE_TESTS` for a broad sweep unless it is needed — some pre-existing
+live tests save documents and prompt the user.
