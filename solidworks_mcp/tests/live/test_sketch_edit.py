@@ -1,235 +1,272 @@
+"""Live COM tests for the sketch editing tools (M1.2 slice 1).
+
+One scratch part carries the whole sequence: every step owns its own zone of
+the sketch plane, exercises exactly one editing tool, and is screenshotted
+before the part is closed.  Trim and extend, which used to live in
+``test_documents``, are part of the same sequence here.
+"""
+
 import math
-import os
 import unittest
 
-from solidworks_mcp.automation import SolidWorksAutomation
-from solidworks_mcp.comutil import com
+from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_edit import (
-    offset_entities, sketch_chamfer, sketch_fillet, sketch_mirror,
-    sketch_pattern_circular, sketch_pattern_linear, split_entities,
+    extend_entities, offset_entities, sketch_chamfer, sketch_fillet,
+    sketch_mirror, sketch_pattern_circular, sketch_pattern_linear,
+    split_entities, trim_entities,
 )
 
 
-@unittest.skipUnless(
-    os.environ.get("SW_MCP_LIVE_TESTS") == "1",
-    "Set SW_MCP_LIVE_TESTS=1 to run SolidWorks COM tests.",
-)
-class LiveSketchEditTests(unittest.TestCase):
-    """Each edit runs on a scratch part and the part is closed unsaved."""
+@live_only
+class LiveSketchEditTests(ScratchPartTestCase):
+    def test_sketch_edit_sequence_on_one_scratch_part(self):
+        self.open_scratch_part()
 
-    def setUp(self):
-        self.automation = SolidWorksAutomation()
-        result = self.automation.connect()
-        if not result["success"]:
-            self.skipTest(result["message"])
-        self.created_titles = []
+        cases = self._cases()
+        for index, (purpose, body) in enumerate(cases, 1):
+            with self.subTest(step=index, purpose=purpose):
+                try:
+                    body()
+                finally:
+                    self.close_sketch()
+                self.capture(index, purpose)
 
-    def tearDown(self):
-        for title in reversed(self.created_titles):
-            try:
-                self.automation.app.CloseDoc(title)
-            except Exception:
-                pass
-        self.automation.disconnect()
+        self.assert_unsaved()
 
-    def _new_part(self):
-        result = self.automation.create_new_part()
+    # -- helpers -----------------------------------------------------------
+    def _result(self, result):
         self.assertTrue(result["success"], result["message"])
-        self.created_titles.append(result["data"]["name"])
+        return result
 
-    def _document(self):
-        document, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        return document
+    def _rectangle(self, position, half_width=25, half_height=15):
+        ox, oy = zone(*position)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_rectangle(
+            ox - half_width, oy - half_height, ox + half_width, oy + half_height,
+            "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+        return sketch
 
-    def _feature(self, name):
-        feature = com(self._document(), "FirstFeature")
-        while feature is not None:
-            if com(feature, "Name") == name:
-                return feature
-            feature = com(feature, "GetNextFeature")
-        return None
+    def _circle(self, position, dx=20, dy=0, radius=4, plane="Front"):
+        ox, oy = zone(*position)
+        sketch = self.new_sketch(plane)
+        drawn = self.automation.draw_circle(ox + dx, oy + dy, radius, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+        return sketch
 
-    def _sketch(self, name):
-        feature = self._feature(name)
-        self.assertIsNotNone(feature, f"sketch not found: {name}")
-        return com(feature, "GetSpecificFeature2")
+    # -- the ordered sequence ----------------------------------------------
+    def _cases(self):
+        return [
+            ("fillet one rectangle corner", self._fillet),
+            ("chamfer by angle", self._chamfer_angle),
+            ("chamfer by two distances", self._chamfer_distance_distance),
+            ("chamfer with equal distances", self._chamfer_equal),
+            ("fillet without constrained corners", self._fillet_free),
+            ("offset one way", self._offset),
+            ("offset both ways", self._offset_both),
+            ("offset as construction geometry", self._offset_construction),
+            ("mirror a circle about a centerline", self._mirror),
+            ("split a line at a point", self._split),
+            ("trim two lines to a corner", self._trim),
+            ("extend a line to the next entity", self._extend),
+            ("linear pattern grid", self._linear_grid),
+            ("linear pattern folded onto one line", self._linear_collinear),
+            ("circular pattern full turn", self._circular_full),
+            ("circular pattern partial, counter clockwise", self._circular_partial),
+            ("circular pattern on the top plane", self._circular_top_plane),
+        ]
 
-    def _open_sketch(self, plane="Front"):
-        sketch = self.automation.create_sketch(plane, exact_geometry=True)
-        self.assertTrue(sketch["success"], sketch["message"])
+    # -- fillet and chamfer ------------------------------------------------
+    def _fillet(self):
+        sketch = self._rectangle((0, 0))
+        self.assertEqual((4, 0), self.counts(sketch))
+        self._result(sketch_fillet(self.automation, sketch, ["Line1", "Line2"],
+                                   radius=8, unit="mm"))
+        self.assertEqual((4, 1), self.counts(sketch))
 
-    def _close_sketch(self):
-        self.automation.exit_sketch()
+    def _fillet_free(self):
+        sketch = self._rectangle((0, 1))
+        self._result(sketch_fillet(self.automation, sketch, ["Line1", "Line2"],
+                                   radius=5, constrained_corners=False,
+                                   unit="mm"))
+        self.assertEqual((4, 1), self.counts(sketch))
 
-    def _counts(self, name):
-        sketch = self._sketch(name)
-        return (int(com(sketch, "GetLineCount")), int(com(sketch, "GetArcCount")))
+    def _chamfer_angle(self):
+        sketch = self._rectangle((1, 0))
+        self._result(sketch_chamfer(self.automation, sketch, ["Line1", "Line2"],
+                                    distance=6, mode="distance_angle",
+                                    angle_deg=45, unit="mm"))
+        self.assertEqual((5, 0), self.counts(sketch))
 
-    def _centres_mm(self, name):
-        """Arc/circle centres in the sketch's own 2D coordinate system."""
-        centres = []
-        for segment in com(self._sketch(name), "GetSketchSegments") or []:
-            if int(com(segment, "GetType")) == 0:
-                continue
-            point = com(segment, "GetCenterPoint")
-            centres.append((round(float(point[0]) * 1000, 3),
-                            round(float(point[1]) * 1000, 3)))
-        return centres
+    def _chamfer_distance_distance(self):
+        sketch = self._rectangle((2, 0))
+        self._result(sketch_chamfer(self.automation, sketch, ["Line1", "Line2"],
+                                    distance=6, distance2=9,
+                                    mode="distance_distance", unit="mm"))
+        self.assertEqual((5, 0), self.counts(sketch))
 
-    def _assert_unsaved(self):
-        active, error = self.automation.capture_active_document_ref()
-        self.assertIsNone(error)
-        self.assertIsNone(active.path)
+    def _chamfer_equal(self):
+        sketch = self._rectangle((3, 0))
+        self._result(sketch_chamfer(self.automation, sketch, ["Line1", "Line2"],
+                                    distance=6, mode="distance_equal", unit="mm"))
+        self.assertEqual((5, 0), self.counts(sketch))
 
-    def test_fillet_and_chamfer_scratch_rectangle_without_saving(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_rectangle(-30, -20, 30, 20, "mm")
-        self._close_sketch()
-        self.assertEqual((4, 0), self._counts("Sketch1"))
+    # -- offset ------------------------------------------------------------
+    def _offset(self):
+        sketch = self._rectangle((1, 1))
+        self._result(offset_entities(
+            self.automation, sketch, ["Line1", "Line2", "Line3", "Line4"],
+            offset=5, unit="mm"))
+        self.assertEqual((8, 0), self.counts(sketch))
 
-        fillet = sketch_fillet(self.automation, "Sketch1", ["Line1", "Line2"],
-                               radius=8, unit="mm")
-        self.assertTrue(fillet["success"], fillet["message"])
-        self.assertEqual((4, 1), self._counts("Sketch1"))
+    def _offset_both(self):
+        sketch = self._rectangle((2, 1))
+        self._result(offset_entities(
+            self.automation, sketch, ["Line1", "Line2", "Line3", "Line4"],
+            offset=5, both_directions=True, unit="mm"))
+        self.assertEqual((12, 0), self.counts(sketch))
 
-        chamfer = sketch_chamfer(self.automation, "Sketch1", ["Line3", "Line4"],
-                                 distance=6, mode="distance_angle",
-                                 angle_deg=45, unit="mm")
-        self.assertTrue(chamfer["success"], chamfer["message"])
-        self.assertEqual((5, 1), self._counts("Sketch1"))
-        self._assert_unsaved()
+    def _offset_construction(self):
+        sketch = self._rectangle((3, 1))
+        self._result(offset_entities(
+            self.automation, sketch, ["Line1", "Line2", "Line3", "Line4"],
+            offset=5, make_construction=True, unit="mm"))
+        self.assertEqual((8, 0), self.counts(sketch))
+        self.assertEqual(4, self.construction_count(sketch))
 
-    def test_offset_scratch_sketch_without_saving(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_rectangle(-30, -20, 30, 20, "mm")
-        self._close_sketch()
+    # -- mirror, split, trim, extend ---------------------------------------
+    def _mirror(self):
+        ox, oy = zone(0, 2)
+        sketch = self.new_sketch()
+        axis = self.automation.draw_centerline(ox, oy - 30, ox, oy + 30, "mm")
+        self.assertTrue(axis["success"], axis["message"])
+        circle = self.automation.draw_circle(ox + 20, oy, 8, "mm")
+        self.assertTrue(circle["success"], circle["message"])
+        self.exit_sketch()
 
-        offset = offset_entities(self.automation, "Sketch1",
-                                 ["Line1", "Line2", "Line3", "Line4"],
-                                 offset=5, unit="mm")
+        self._result(sketch_mirror(self.automation, sketch, ["Arc1"],
+                                   mirror_entity="Line1"))
+        self.assertEqual((1, 2), self.counts(sketch))
+        self.assertEqual(sorted([(ox + 20.0, oy), (ox - 20.0, oy)]),
+                         sorted(self.centres_mm(sketch)))
 
-        self.assertTrue(offset["success"], offset["message"])
-        self.assertEqual((8, 0), self._counts("Sketch1"))
-        self._assert_unsaved()
+    def _split(self):
+        ox, oy = zone(1, 2)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_line(ox - 30, oy, ox + 30, oy, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
 
-    def test_mirror_scratch_sketch_without_saving(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_centerline(0, -40, 0, 40, "mm")
-        self.automation.draw_circle(20, 0, 8, "mm")
-        self._close_sketch()
+        self._result(split_entities(self.automation, sketch, ["Line1"],
+                                    x=ox, y=oy, unit="mm"))
+        self.assertEqual((2, 0), self.counts(sketch))
 
-        mirror = sketch_mirror(self.automation, "Sketch1", ["Arc1"],
-                               mirror_entity="Line1")
+    def _trim(self):
+        ox, oy = zone(2, 2)
+        sketch = self.new_sketch()
+        first = self.automation.draw_line(ox - 25, oy, ox + 25, oy, "mm")
+        self.assertTrue(first["success"], first["message"])
+        second = self.automation.draw_line(ox, oy - 20, ox, oy + 20, "mm")
+        self.assertTrue(second["success"], second["message"])
+        self.exit_sketch()
+        self.assertEqual([50.0, 40.0], self.segment_lengths_mm(sketch))
 
-        self.assertTrue(mirror["success"], mirror["message"])
-        self.assertEqual((1, 2), self._counts("Sketch1"))
+        self._result(trim_entities(self.automation, sketch, ["Line1", "Line2"],
+                                   "corner"))
+        self.assertEqual([25.0, 20.0], self.segment_lengths_mm(sketch))
+
+    def _extend(self):
+        ox, oy = zone(3, 2)
+        sketch = self.new_sketch()
+        first = self.automation.draw_line(ox - 30, oy, ox - 10, oy, "mm")
+        self.assertTrue(first["success"], first["message"])
+        second = self.automation.draw_line(ox + 10, oy - 10, ox + 10, oy + 10, "mm")
+        self.assertTrue(second["success"], second["message"])
+        self.exit_sketch()
+        self.assertEqual([20.0, 20.0], self.segment_lengths_mm(sketch))
+
+        self._result(extend_entities(self.automation, sketch, ["Line1"],
+                                     pick=[ox - 10, oy, 0]))
+        self.assertEqual([40.0, 20.0], self.segment_lengths_mm(sketch))
+
+    # -- patterns ----------------------------------------------------------
+    def _linear_grid(self):
+        ox, oy = zone(0, 3)
+        sketch = self._circle((0, 3), dx=0, dy=0, radius=5)
+        self._result(sketch_pattern_linear(
+            self.automation, sketch, ["Arc1"], spacing_x=20, spacing_y=15,
+            count_x=2, count_y=3, unit="mm"))
+        self.assertEqual((0, 6), self.counts(sketch))
         self.assertEqual(
-            sorted([(20.0, 0.0), (-20.0, 0.0)]),
-            sorted(self._centres_mm("Sketch1")),
-        )
-        self._assert_unsaved()
+            sorted([(ox, oy), (ox + 20, oy), (ox, oy + 15),
+                    (ox + 20, oy + 15), (ox, oy + 30), (ox + 20, oy + 30)]),
+            sorted(self.centres_mm(sketch)))
 
-    def test_split_scratch_sketch_entity_without_saving(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_line(-30, 0, 30, 0, "mm")
-        self._close_sketch()
+    def _linear_collinear(self):
+        """A zero second angle folds the second row onto the same line."""
+        ox, oy = zone(1, 3)
+        sketch = self._circle((1, 3), dx=0, dy=0, radius=5)
+        self._result(sketch_pattern_linear(
+            self.automation, sketch, ["Arc1"], spacing_x=20, spacing_y=15,
+            count_x=2, count_y=2, angle_y_deg=0, unit="mm"))
+        centres = self.centres_mm(sketch)
+        self.assertEqual(4, len(centres))
+        self.assertTrue(all(abs(y - oy) < 1e-6 for _x, y in centres), centres)
+        self.assertEqual([ox, ox + 15, ox + 20, ox + 35],
+                         sorted(x for x, _y in centres))
 
-        split = split_entities(self.automation, "Sketch1", ["Line1"],
-                               x=0, y=0, unit="mm")
-
-        self.assertTrue(split["success"], split["message"])
-        self.assertEqual((2, 0), self._counts("Sketch1"))
-        self._assert_unsaved()
-
-    def test_linear_pattern_scratch_sketch_without_saving(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_circle(0, 0, 5, "mm")
-        self._close_sketch()
-
-        result = sketch_pattern_linear(
-            self.automation, "Sketch1", ["Arc1"], spacing_x=20, spacing_y=15,
-            count_x=2, count_y=3, unit="mm",
-        )
-
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual((0, 6), self._counts("Sketch1"))
-        self.assertEqual(
-            sorted([
-                (0.0, 0.0), (20.0, 0.0), (0.0, 15.0),
-                (20.0, 15.0), (0.0, 30.0), (20.0, 30.0),
-            ]),
-            sorted(self._centres_mm("Sketch1")),
-        )
-        self._assert_unsaved()
-
-    def test_circular_pattern_about_a_centre_without_saving(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_circle(20, 0, 4, "mm")
-        self._close_sketch()
-
-        result = sketch_pattern_circular(self.automation, "Sketch1", ["Arc1"],
-                                         count=4, center_x=0, center_y=0,
-                                         unit="mm")
-
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual((0, 4), self._counts("Sketch1"))
+    def _circular_full(self):
+        ox, oy = zone(2, 3)
+        sketch = self._circle((2, 3), dx=20, dy=0, radius=4)
+        result = self._result(sketch_pattern_circular(
+            self.automation, sketch, ["Arc1"], count=4, center_x=ox,
+            center_y=oy, unit="mm"))
+        self.assertEqual((0, 4), self.counts(sketch))
         self.assertAlmostEqual(20.0, result["data"]["arc_radius"], places=6)
         self.assertAlmostEqual(180.0, result["data"]["arc_angle_deg"], places=6)
         self.assertEqual(
-            sorted([(20.0, 0.0), (0.0, 20.0), (-20.0, 0.0), (0.0, -20.0)]),
-            sorted(self._centres_mm("Sketch1")),
-        )
-        self._assert_unsaved()
+            sorted([(ox + 20, oy), (ox, oy + 20), (ox - 20, oy),
+                    (ox, oy - 20)]),
+            sorted(self.centres_mm(sketch)))
 
-    def test_partial_circular_pattern_steps_counter_clockwise(self):
-        self._new_part()
-        self._open_sketch()
-        self.automation.draw_circle(20, 0, 4, "mm")
-        self._close_sketch()
-
-        result = sketch_pattern_circular(self.automation, "Sketch1", ["Arc1"],
-                                         count=3, total_angle_deg=90, unit="mm")
-
-        self.assertTrue(result["success"], result["message"])
-        expected = [(20.0, 0.0)]
+    def _circular_partial(self):
+        ox, oy = zone(3, 3)
+        sketch = self._circle((3, 3), dx=20, dy=0, radius=4)
+        self._result(sketch_pattern_circular(
+            self.automation, sketch, ["Arc1"], count=3, total_angle_deg=90,
+            center_x=ox, center_y=oy, unit="mm"))
+        expected = [(ox + 20, oy)]
         for index in range(1, 3):
             angle = math.radians(30.0 * index)
-            expected.append((round(20.0 * math.cos(angle), 3),
-                             round(20.0 * math.sin(angle), 3)))
-        self.assertEqual(sorted(expected), sorted(self._centres_mm("Sketch1")))
-        self._assert_unsaved()
+            expected.append((round(ox + 20.0 * math.cos(angle), 3),
+                             round(oy + 20.0 * math.sin(angle), 3)))
+        self.assertEqual(sorted(expected), sorted(self.centres_mm(sketch)))
 
-    def test_circular_pattern_uses_sketch_coordinates_on_the_top_plane(self):
-        self._new_part()
-        self._open_sketch("Top")
-        self.automation.draw_circle(20, 10, 4, "mm")
-        self._close_sketch()
+    def _circular_top_plane(self):
+        """A top-plane sketch is deliberately placed clear of the front grid."""
+        centre = (270.0, 0.0)
+        sketch = self.new_sketch("Top")
+        drawn = self.automation.draw_circle(centre[0] + 20, centre[1] + 10, 4, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
 
-        result = sketch_pattern_circular(self.automation, "Sketch1", ["Arc1"],
-                                         count=4, center_x=0, center_y=0,
-                                         unit="mm")
-
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual((0, 4), self._counts("Sketch1"))
+        result = self._result(sketch_pattern_circular(
+            self.automation, sketch, ["Arc1"], count=4, center_x=centre[0],
+            center_y=centre[1], unit="mm"))
+        self.assertEqual((0, 4), self.counts(sketch))
         radius = math.hypot(20.0, 10.0)
         phase = math.atan2(10.0, 20.0)
         expected = []
         for index in range(4):
             angle = phase + index * math.radians(90.0)
-            expected.append((round(radius * math.cos(angle), 2),
-                             round(radius * math.sin(angle), 2)))
+            expected.append((round(centre[0] + radius * math.cos(angle), 2),
+                             round(centre[1] + radius * math.sin(angle), 2)))
         observed = [(round(u, 2), round(v, 2))
-                    for u, v in self._centres_mm("Sketch1")]
+                    for u, v in self.centres_mm(sketch)]
         self.assertEqual(sorted(expected), sorted(observed))
         self.assertAlmostEqual(radius, result["data"]["arc_radius"], places=4)
-        self._assert_unsaved()
 
 
 if __name__ == "__main__":

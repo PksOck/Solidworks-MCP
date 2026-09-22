@@ -40,7 +40,7 @@ ordered backlog:
 
 | Milestone | Content | Status |
 |---|---|---|
-| M1.1 | Sketch entities | partial: 13 of ~22 tools done (`draw_equation_curve` missing) |
+| M1.1 | Sketch entities | 21 of 22 tools done and live-verified in one sequence (`draw_equation_curve` missing) |
 | M1.2 | Sketch editing | slice 1 done: fillet, chamfer, offset, mirror, split, linear and circular patterns |
 | M1.3 | Sketch relations and dimensions | not started |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
@@ -78,12 +78,42 @@ Verification:
 ```powershell
 .venv\Scripts\python.exe -m unittest solidworks_mcp.tests.test_sketch_edit_tools -v
 $env:SW_MCP_LIVE_TESTS='1'
-.venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_edit -v
+$env:SW_MCP_KEEP_REVIEW='1'
+.venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_edit solidworks_mcp.tests.live.test_sketch_entities -v
 ```
 
-Result: 37 unit tests and 8 live COM tests green. The live tests prove the
-instance positions (arc centres) for both patterns and leave every scratch part
-unsaved.
+Result: 58 unit tests green; the two live modules run two tests in about 150 s
+and leave every scratch part unsaved.
+
+## Live test strategy (changed 2026-09-22)
+
+Do **not** create one scratch document per assertion. Both sketch live modules
+now build their evidence as an explicit sequence of steps inside **one** scratch
+part, via `solidworks_mcp/tests/live/_scratch.py`
+(`ScratchPartTestCase`, `live_only`, `zone`):
+
+- one step per tool, in build order, with a stated purpose
+- each step owns its own zone of the sketch plane (`zone(column, row)`,
+  90 mm pitch) and keeps its geometry inside that zone, so the accumulating
+  part never overlaps itself
+- several parameter sets of the same entity go into the same step
+- every step takes a screenshot before the part is closed; screenshots land in
+  `<first output root>/review` and are deleted again unless
+  `SW_MCP_KEEP_REVIEW=1`
+- trim and extend moved here out of `tests/live/test_documents.py`
+
+Current shape: `test_sketch_entities.py` = 21 entity steps + a plate profile
++ the extrusion (23 screenshots); `test_sketch_edit.py` = 17 edit and pattern
+steps (17 screenshots).
+
+When a step ends in a feature, prove success by **volume**, not by body count:
+a single sketch with several closed loops extrudes all of them, but a body count
+of 1 looks identical if only the first loop was used. See
+`docs/api-findings.md` section 23.6.
+
+The same consolidation should be applied to the part-feature live tests in
+`tests/live/test_documents.py` (they still create one part per test) when M2
+work next touches them.
 
 Full regression command:
 
@@ -91,8 +121,9 @@ Full regression command:
 .venv\Scripts\python.exe -m unittest discover -s solidworks_mcp\tests -v
 ```
 
-Result: 320 tests run, 35 skipped, 0 failures (with
-`SW_MCP_LIVE_TESTS=1`: 320 run, 2 skipped, 0 failures).
+Result: 320 tests run, 35 skipped, 0 failures before this test-only change;
+the consolidation removes two live tests from `test_documents.py` and merges
+eleven into two, so expect 318 declarations with a much smaller live runtime.
 
 ## Current capability register
 
@@ -141,6 +172,11 @@ Recommended next items, in the plan's order:
   see `docs/api-findings.md` section 23.4.
 - `ISketchSegment.GetCenterPoint`/`GetStartPoint`/`GetEndPoint` return
   **sketch** coordinates, not model coordinates.
+- An extrusion consumes the closed loops of the **selected sketch only**; the
+  proof that every loop was used is the volume, not the body count. A plate
+  profile plus five holes gives one body either way.
+- With `angle_y_deg = 0` a linear sketch pattern folds the second row onto the
+  first line instead of stacking perpendicular to it.
 - `IMathUtility.CreatePoint` + `IMathPoint.MultiplyTransform` is broken in this
   build (returns the translation alone).
 - Leaveover unsaved `Part*` scratch documents wedge `create_sketch`/`draw_line`.
@@ -197,4 +233,14 @@ Test economy: run only the focused module(s) for the slice being changed
 (`python -m unittest solidworks_mcp.tests.<module> -v`) while iterating. Run the
 whole `discover` sweep once before committing, and do not enable
 `SW_MCP_LIVE_TESTS` for a broad sweep unless it is needed — some pre-existing
-live tests save documents and prompt the user.
+live tests save documents and prompt the user. The two consolidated sketch
+modules are the safe live pair:
+
+```powershell
+$env:SW_MCP_LIVE_TESTS='1'
+$env:SW_MCP_KEEP_REVIEW='1'   # optional: keep the per-step screenshots
+.venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_entities solidworks_mcp.tests.live.test_sketch_edit -v
+```
+
+Screenshots are written to `C:\Users\Jan\Documents\SolidWorks MCP Output\review`
+and are meant to be looked at before the scratch part is discarded.

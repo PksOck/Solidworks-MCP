@@ -1,8 +1,16 @@
-import os
+"""Live COM tests for the sketch entity tools (M1.1).
+
+One scratch part is built in an explicit sequence: one step per entity tool,
+each step owning its own zone of the sketch plane, each step screenshotted
+before the part is closed.  The sequence ends with a plate profile that is
+extruded; its measured volume proves that the whole profile (outline *and*
+holes) was used, not just the first loop.
+"""
+
+import math
 import unittest
 
-from solidworks_mcp.automation import SolidWorksAutomation
-from solidworks_mcp.comutil import com
+from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_entities import (
     draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
     draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_parallelogram,
@@ -11,149 +19,182 @@ from solidworks_mcp.tools.sketch_entities import (
 )
 
 
-@unittest.skipUnless(
-    os.environ.get("SW_MCP_LIVE_TESTS") == "1",
-    "Set SW_MCP_LIVE_TESTS=1 to run SolidWorks COM tests.",
-)
-class LiveSketchEntityTests(unittest.TestCase):
-    """Each entity is drawn in its own scratch sketch and verified by counting."""
+# The plate step sits two rows below the last entity step.
+PLATE_ZONE = (0, -450)
+PLATE = dict(width=120.0, height=70.0, depth=8.0, hole_radius=4.0,
+             holes=((-45, -22), (45, -22), (-45, 22), (45, 22), (0, 0)))
 
-    def setUp(self):
-        self.automation = SolidWorksAutomation()
-        result = self.automation.connect()
-        if not result["success"]:
-            self.skipTest(result["message"])
-        self.created_titles = []
 
-    def tearDown(self):
-        for title in reversed(self.created_titles):
-            try:
-                self.automation.app.CloseDoc(title)
-            except Exception:
-                pass
-        self.automation.disconnect()
+@live_only
+class LiveSketchEntityTests(ScratchPartTestCase):
+    def test_every_entity_builds_a_complex_plate_without_saving(self):
+        self.open_scratch_part()
 
-    def _new_part(self):
-        result = self.automation.create_new_part()
-        self.assertTrue(result["success"], result["message"])
-        title = result["data"]["name"]
-        self.created_titles.append(title)
-        return title
+        cases = self._entity_cases()
+        self.assertEqual(21, len(cases), "every entity tool needs one step")
+        for index, (purpose, plane, calls, expectations) in enumerate(cases, 1):
+            with self.subTest(step=index, purpose=purpose):
+                self._step(index, purpose, plane, calls, expectations)
 
-    def _active_sketch(self):
-        document, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        sketch = com(document, "GetActiveSketch2")
-        self.assertIsNotNone(sketch, "expected an active sketch")
-        return sketch
+        self._plate_step(len(cases) + 1)
+        self.assert_unsaved()
 
-    def _segment_count(self):
-        segments = com(self._active_sketch(), "GetSketchSegments")
-        return 0 if segments is None else len(segments)
+    def _step(self, index, purpose, plane, calls, expectations):
+        try:
+            sketch = self.new_sketch(plane)
+            for call in calls:
+                result = call()
+                self.assertTrue(result["success"], result["message"])
+        finally:
+            self.close_sketch()
+        for expectation in expectations:
+            self._check(sketch, expectation)
+        self.capture(index, purpose)
 
-    def _count(self, getter):
-        value = com(self._active_sketch(), getter)
-        return 0 if value is None else int(value)
+    # -- the ordered sequence ----------------------------------------------
+    def _entity_cases(self):
+        """(purpose, plane, calls, expectations) in build order."""
+        automation = self.automation
+        cases = []
 
-    def _draw_in_new_sketch(self, call):
-        sketch = self.automation.create_sketch("Front", exact_geometry=True)
-        self.assertTrue(sketch["success"], sketch["message"])
-        before = self._segment_count()
-        result = call()
-        self.assertTrue(result["success"], result["message"])
-        after = self._segment_count()
-        self.automation.exit_sketch()
-        return result, before, after
+        def add(purpose, plane, calls, expectations):
+            cases.append((purpose, plane, calls, expectations))
 
-    def test_sketch_entity_tools_create_geometry_without_saving(self):
-        self._new_part()
+        def at(position, x, y):
+            ox, oy = zone(*position)
+            return ox + x, oy + y
 
-        cases = [
-            ("centerline", lambda: draw_centerline(self.automation, 0, -40, 0, 40), 1),
-            ("circle radius", lambda: draw_circle_radius(self.automation, -60, 0, 10), 1),
-            ("center rectangle",
-             lambda: draw_center_rectangle(self.automation, 40, 0, 20, 10), 4),
-            ("3-point corner rectangle",
-             lambda: draw_rectangle_3point_corner(
-                 self.automation, 80, -5, 100, -5, 100, 5), 4),
-            ("3-point center rectangle",
-             lambda: draw_rectangle_3point_center(
-                 self.automation, 130, 0, 145, 0, 130, 8), 4),
-            ("parallelogram",
-             lambda: draw_parallelogram(
-                 self.automation, 170, -5, 190, -5, 180, 5), 4),
-            ("ellipse", lambda: draw_ellipse(self.automation, -100, 40, 15, 8), 1),
-            ("elliptical arc",
+        add("open lines at three angles", "Front",
+            [lambda: automation.draw_line(*at((0, 0), 0, 20), *at((0, 0), 10, -20), "mm"),
+             lambda: automation.draw_line(*at((0, 0), 20, -20), *at((0, 0), 30, 10), "mm"),
+             lambda: automation.draw_line(*at((0, 0), -25, -15), *at((0, 0), -5, 20), "mm")],
+            [("counter", "GetLineCount", 3)])
+        add("reference centerlines", "Front",
+            [lambda: automation.draw_centerline(*at((1, 0), 0, -30), *at((1, 0), 0, 30), "mm"),
+             lambda: automation.draw_centerline(*at((1, 0), -30, 0), *at((1, 0), 30, 0), "mm")],
+            [("counter", "GetLineCount", 2)])
+        add("circles by an edge point", "Front",
+            [lambda: automation.draw_circle(*at((2, 0), -12, 0), 8, "mm"),
+             lambda: automation.draw_circle(*at((2, 0), 12, 0), 12, "mm")],
+            [("counter", "GetArcCount", 2)])
+        add("circles by radius", "Front",
+            [lambda: draw_circle_radius(automation, *at((3, 0), -14, 0), 10, "mm"),
+             lambda: draw_circle_radius(automation, *at((3, 0), 14, 0), 6, "mm")],
+            [("counter", "GetArcCount", 2)])
+        add("rectangle from two corners", "Front",
+            [lambda: automation.draw_rectangle(*at((0, 1), -30, -18), *at((0, 1), 10, 18), "mm")],
+            [("counter", "GetLineCount", 4)])
+        add("rectangle from its centre", "Front",
+            [lambda: draw_center_rectangle(automation, *at((1, 1), 0, 0), 44, 30, "mm")],
+            [("counter", "GetLineCount", 6), ("construction", 2)])
+        add("rectangle from three corners", "Front",
+            [lambda: draw_rectangle_3point_corner(
+                automation, *at((2, 1), -25, -15), *at((2, 1), -25, 15),
+                *at((2, 1), 15, 15), "mm")],
+            [("counter", "GetLineCount", 4)])
+        add("rectangle from three points, centred", "Front",
+            [lambda: draw_rectangle_3point_center(
+                automation, *at((3, 1), -20, 0), *at((3, 1), 20, 0),
+                *at((3, 1), -20, 14), "mm")],
+            [("counter", "GetLineCount", 6), ("construction", 2)])
+        add("parallelogram", "Front",
+            [lambda: draw_parallelogram(
+                automation, *at((0, 2), -20, -15), *at((0, 2), 20, -15),
+                *at((0, 2), 0, 15), "mm")],
+            [("counter", "GetLineCount", 4)])
+        add("arcs from a centre and two angles", "Front",
+            [lambda: automation.draw_arc_center(*at((1, 2), 0, 0), 16, 0, 90, "mm"),
+             lambda: automation.draw_arc_center(*at((1, 2), 0, 0), 24, 90, 200, "mm")],
+            [("counter", "GetArcCount", 2)])
+        add("arcs through three points", "Front",
+            [lambda: automation.draw_arc_3point(
+                *at((2, 2), -25, -5), *at((2, 2), 25, -5), *at((2, 2), 0, 15), "mm"),
+             lambda: automation.draw_arc_3point(
+                *at((2, 2), -25, 15), *at((2, 2), 25, 15), *at((2, 2), 0, -10), "mm")],
+            [("counter", "GetArcCount", 2)])
+        add("tangent arc chain", "Front",
+            [lambda: automation.draw_line(*at((3, 2), -25, -10), *at((3, 2), 5, -10), "mm"),
+             lambda: draw_tangent_arc(
+                automation, *at((3, 2), 5, -10), *at((3, 2), 20, 0), "mm"),
+             lambda: draw_tangent_arc(
+                automation, *at((3, 2), 20, 0), *at((3, 2), 25, 15), "mm")],
+            [("counter", "GetArcCount", 2), ("counter", "GetLineCount", 1)])
+        add("spline through points", "Front",
+            [lambda: automation.draw_spline(
+                [list(at((0, 3), -25, -15)), list(at((0, 3), -10, 15)),
+                 list(at((0, 3), 10, -15)), list(at((0, 3), 25, 10))], "mm")],
+            [("segments", 1)])
+        add("ellipse, one rotated", "Front",
+            [lambda: draw_ellipse(automation, *at((1, 3), -14, 0), 12, 6, unit="mm"),
+             lambda: draw_ellipse(automation, *at((1, 3), 14, 0), 8, 5,
+                                  rotation_deg=45, unit="mm")],
+            [("counter", "GetEllipseCount", 2)])
+        add("partial elliptical arcs", "Front",
+            [lambda: draw_elliptical_arc(
+                automation, *at((2, 3), -14, 0), 12, 6, end_angle_deg=180, unit="mm"),
              lambda: draw_elliptical_arc(
-                 self.automation, 0, 60, 20, 10, end_angle_deg=180), 1),
-            ("parabola",
-             lambda: draw_parabola(
-                 self.automation, 60, 50, 60, 40, 40, 60, 80, 60), 1),
-        ]
+                automation, *at((2, 3), 14, 0), 10, 5, end_angle_deg=270, unit="mm")],
+            [("counter", "GetEllipseCount", 2)])
+        add("parabola from focus and apex", "Front",
+            [lambda: draw_parabola(
+                automation, *at((3, 3), 0, 0), *at((3, 3), 0, -10),
+                *at((3, 3), -20, 10), *at((3, 3), 20, 10), "mm")],
+            [("counter", "GetParabolaCount", 1)])
+        add("triangle and hexagon", "Front",
+            [lambda: automation.draw_polygon(*at((0, 4), -14, 0), 14, 3, "mm"),
+             lambda: automation.draw_polygon(*at((0, 4), 14, 0), 12, 6, "mm")],
+            [("min_lines", 9)])
+        add("sketch points", "Front",
+            [lambda: draw_point(automation, *at((1, 4), -15, 0), "mm"),
+             lambda: draw_point(automation, *at((1, 4), 0, 12), "mm"),
+             lambda: draw_point(automation, *at((1, 4), 15, 0), "mm")],
+            [("counter", "GetUserPointsCount", 3)])
+        add("straight slots", "Front",
+            [lambda: automation.draw_slot(*at((2, 4), -20, -12), *at((2, 4), 15, -12), 8, "mm"),
+             lambda: automation.draw_slot(*at((2, 4), 10, 15), *at((2, 4), -20, 15), 6, "mm")],
+            [("counter", "GetSketchSlotCount", 2)])
+        add("arc slot", "Front",
+            [lambda: draw_arc_slot(
+                automation, *at((3, 4), 0, -15), *at((3, 4), 25, -15),
+                *at((3, 4), 0, 10), 6, "mm")],
+            [("counter", "GetSketchSlotCount", 1)])
+        add("three point arc slot", "Front",
+            [lambda: draw_arc_slot_3point(
+                automation, *at((0, 5), -25, -10), *at((0, 5), 0, 10),
+                *at((0, 5), 25, -10), 6, "mm")],
+            [("counter", "GetSketchSlotCount", 1)])
+        return cases
 
-        for label, call, minimum_segments in cases:
-            with self.subTest(entity=label):
-                _result, before, after = self._draw_in_new_sketch(call)
-                self.assertGreaterEqual(
-                    after - before, minimum_segments,
-                    f"{label} added {after - before} segments, expected {minimum_segments}",
-                )
+    # -- the piece itself --------------------------------------------------
+    def _plate_step(self, index):
+        """One closed plate profile with five holes, then a boss extrusion."""
+        ox, oy = PLATE_ZONE
+        half_w = PLATE["width"] / 2
+        half_h = PLATE["height"] / 2
 
-    def test_tangent_arc_and_arc_slots_create_geometry_without_saving(self):
-        self._new_part()
+        plate = self.new_sketch("Front")
+        outline = self.automation.draw_rectangle(
+            ox - half_w, oy - half_h, ox + half_w, oy + half_h, "mm")
+        self.assertTrue(outline["success"], outline["message"])
+        for dx, dy in PLATE["holes"]:
+            hole = draw_circle_radius(self.automation, ox + dx, oy + dy,
+                                      PLATE["hole_radius"], "mm")
+            self.assertTrue(hole["success"], hole["message"])
+        self.exit_sketch()
+        self.assertEqual((4, 5), self.counts(plate))
+        self.capture(index, "plate profile with five holes")
 
-        # A tangent arc needs an existing segment endpoint to be tangent to.
-        sketch = self.automation.create_sketch("Front", exact_geometry=True)
-        self.assertTrue(sketch["success"], sketch["message"])
-        line = self.automation.draw_line(0, 0, 20, 0, "mm")
-        self.assertTrue(line["success"], line["message"])
-        before = self._segment_count()
-        arc = draw_tangent_arc(self.automation, 20, 0, 30, 10)
-        self.assertTrue(arc["success"], arc["message"])
-        self.assertGreaterEqual(self._segment_count() - before, 1)
-        self.automation.exit_sketch()
+        extrusion = self.automation.extrude_sketch(PLATE["depth"], False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        self.assertEqual(1, self.solid_body_count())
+        self.assertEqual(1, self.feature_count("Extrusion"))
 
-        for label, call in [
-            ("arc slot", lambda: draw_arc_slot(
-                self.automation, 0, 0, 30, 0, 0, 30, 6)),
-            ("3-point arc slot", lambda: draw_arc_slot_3point(
-                self.automation, -30, 0, 0, 12, 30, 0, 6)),
-        ]:
-            with self.subTest(entity=label):
-                sketch = self.automation.create_sketch("Front", exact_geometry=True)
-                self.assertTrue(sketch["success"], sketch["message"])
-                before = self._segment_count()
-                slot_before = self._count("GetSketchSlotCount")
-                result = call()
-                self.assertTrue(result["success"], result["message"])
-                self.assertGreater(self._segment_count(), before)
-                self.assertEqual(slot_before + 1, self._count("GetSketchSlotCount"))
-                self.automation.exit_sketch()
-
-    def test_ellipse_parabola_and_point_getters_report_the_geometry(self):
-        self._new_part()
-
-        for label, call, getter in [
-            ("ellipse", lambda: draw_ellipse(self.automation, 0, 0, 15, 8),
-             "GetEllipseCount"),
-            ("parabola",
-             lambda: draw_parabola(self.automation, 60, 50, 60, 40, 40, 60, 80, 60),
-             "GetParabolaCount"),
-        ]:
-            with self.subTest(entity=label):
-                sketch = self.automation.create_sketch("Front", exact_geometry=True)
-                self.assertTrue(sketch["success"], sketch["message"])
-                result = call()
-                self.assertTrue(result["success"], result["message"])
-                self.assertEqual(1, self._count(getter))
-                self.automation.exit_sketch()
-
-        sketch = self.automation.create_sketch("Front", exact_geometry=True)
-        self.assertTrue(sketch["success"], sketch["message"])
-        point = draw_point(self.automation, -30, 0)
-        self.assertTrue(point["success"], point["message"])
-        self.assertEqual(1, self._count("GetUserPointsCount"))
-        self.automation.exit_sketch()
+        # Volume proves every loop of the profile was used, not only the outline.
+        expected = (PLATE["width"] * PLATE["height"] * PLATE["depth"]
+                    - len(PLATE["holes"]) * math.pi
+                    * PLATE["hole_radius"] ** 2 * PLATE["depth"])
+        self.assertAlmostEqual(expected, self.total_volume_mm3(), delta=1.0)
+        self.capture(index + 1, "extruded plate")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,6 @@ from solidworks_mcp.tools.sheetmetal import (
     create_sheet_metal_base_flange, export_flat_pattern,
     flatten_sheet_metal, get_flat_pattern_info, get_sheet_metal_info,
 )
-from solidworks_mcp.tools.sketch_edit import extend_entities, trim_entities
 from solidworks_mcp.tools.weldments import create_structural_member, list_weldment_profiles
 from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
 from solidworks_mcp.tools.history import redo, undo
@@ -647,49 +646,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("NO_MARKED_DIMENSIONS", result["data"]["code"])
         self.assertEqual(0, result["data"]["dimensions_after"])
-        active, error = self.automation.capture_active_document_ref()
-        self.assertIsNone(error)
-        self.assertIsNone(active.path)
-
-    def test_trim_scratch_sketch_corner_without_saving(self):
-        self._new_part()
-        sketch = self.automation.create_sketch("Front", exact_geometry=True)
-        self.assertTrue(sketch["success"], sketch["message"])
-        first = self.automation.draw_line(0, 0, 50, 0, "mm")
-        self.assertTrue(first["success"], first["message"])
-        second = self.automation.draw_line(25, -20, 25, 20, "mm")
-        self.assertTrue(second["success"], second["message"])
-        self._close_sketch()
-        before = self._segment_lengths("Sketch1")
-        self.assertEqual([50.0, 40.0], before)
-
-        result = trim_entities(
-            self.automation, "Sketch1", ["Line1", "Line2"], "corner"
-        )
-
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual([25.0, 20.0], self._segment_lengths("Sketch1"))
-        active, error = self.automation.capture_active_document_ref()
-        self.assertIsNone(error)
-        self.assertIsNone(active.path)
-
-    def test_extend_scratch_sketch_entity_without_saving(self):
-        self._new_part()
-        sketch = self.automation.create_sketch("Front", exact_geometry=True)
-        self.assertTrue(sketch["success"], sketch["message"])
-        first = self.automation.draw_line(0, 0, 20, 0, "mm")
-        self.assertTrue(first["success"], first["message"])
-        second = self.automation.draw_line(40, -10, 40, 10, "mm")
-        self.assertTrue(second["success"], second["message"])
-        self._close_sketch()
-        self.assertEqual([20.0, 20.0], self._segment_lengths("Sketch1"))
-
-        result = extend_entities(
-            self.automation, "Sketch1", ["Line1"], pick=[20, 0, 0]
-        )
-
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual([40.0, 20.0], self._segment_lengths("Sketch1"))
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
