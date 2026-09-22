@@ -12,6 +12,9 @@ guessed; see docs/api-findings.md section 0.
 
 import math
 
+import pythoncom
+import win32com.client
+
 from ..comutil import com
 from ..constants import SwErrors
 from ..core.policy import OperationClass
@@ -33,9 +36,9 @@ def _is_number(value) -> bool:
     )
 
 
-def _invalid(sw, message):
+def _invalid(sw, message, code="VALIDATION_FAILED"):
     return sw._result(
-        False, message, SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"}
+        False, message, SwErrors.swInvalidInput, {"code": code}
     )
 
 
@@ -802,5 +805,154 @@ def draw_sketch_text(sw, text, x=0, y=0, alignment_code=2, unit="mm"):
             "unit": unit,
             "text_segment_count": after,
             "sketch_method": "InsertSketchText",
+        },
+    )
+
+
+def _active_sketch_segment_count(document):
+    """How many segments the active sketch holds, or None when none is open."""
+    sketch = com(document, "GetActiveSketch2")
+    if sketch is None:
+        return None
+    return len(list(com(sketch, "GetSketchSegments") or []))
+
+
+def _point_list(sw, value, label):
+    """Validate a list of [x, y, z] points; return (points, error)."""
+    if value is None:
+        return [], None
+    if not isinstance(value, list):
+        return None, _invalid(sw, f"{label} must be a list of [x, y, z] points.")
+    points = []
+    for index, point in enumerate(value):
+        if (not isinstance(point, (list, tuple)) or len(point) != 3
+                or any(not _is_number(item) for item in point)):
+            return None, _invalid(
+                sw, f"{label}[{index}] must be three finite numbers.")
+        points.append(list(point))
+    return points, None
+
+
+@tool(
+    name="convert_entities",
+    description=(
+        "Convert model geometry into the active sketch (Convert Entities). Give "
+        "the points that lie on the faces or edges to convert, or use the "
+        "current selection; the active sketch must be open for editing. "
+        "SolidWorks silently rejects a selection it cannot convert and clears "
+        "it, so success is proven by the sketch gaining segments. One face or a "
+        "few coherent edges convert reliably; converting every edge of a body "
+        "at once does not."
+    ),
+    schema={"type": "object", "properties": {
+        "faces": {"type": "array", "items": {
+            "type": "array", "items": {"type": "number"},
+            "minItems": 3, "maxItems": 3}},
+        "edges": {"type": "array", "items": {
+            "type": "array", "items": {"type": "number"},
+            "minItems": 3, "maxItems": 3}},
+        "chain": {"type": "boolean", "default": False},
+        "use_selection": {"type": "boolean", "default": False},
+        "unit": UNIT_SCHEMA,
+    }, "required": []},
+    operation_class=OperationClass.MUTATE,
+)
+def convert_entities(sw, faces=None, edges=None, chain=False,
+                     use_selection=False, unit="mm"):
+    if not isinstance(chain, bool) or not isinstance(use_selection, bool):
+        return _invalid(sw, "chain and use_selection must be true or false.")
+
+    face_points, error = _point_list(sw, faces, "faces")
+    if error:
+        return error
+    edge_points, error = _point_list(sw, edges, "edges")
+    if error:
+        return error
+
+    if use_selection and (face_points or edge_points):
+        return _invalid(sw, "Give either points or use_selection, not both.")
+    if not use_selection and not face_points and not edge_points:
+        return _invalid(
+            sw,
+            "Give at least one face or edge point, or set use_selection true.",
+        )
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+
+    before = _active_sketch_segment_count(document)
+    if before is None:
+        return _invalid(
+            sw,
+            "No sketch is open. Open the sketch that should receive the "
+            "converted geometry.",
+            "NO_ACTIVE_SKETCH",
+        )
+
+    callout = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+    if use_selection:
+        selected = int(com(document.SelectionManager,
+                           "GetSelectedObjectCount2", -1))
+    else:
+        com(document, "ClearSelection2", True)
+        selected = 0
+        for kind, points in (("FACE", face_points), ("EDGE", edge_points)):
+            for point in points:
+                meters, conversion_error = _convert_coordinates(sw, unit, point)
+                if conversion_error:
+                    return conversion_error
+                picked = com(document.Extension, "SelectByID2", "", kind,
+                             meters[0], meters[1], meters[2], selected > 0, 0,
+                             callout, 0)
+                if picked:
+                    selected += 1
+
+    if not selected:
+        return sw._result(
+            False,
+            "Nothing was selected: no face or edge was found at the given "
+            "points.",
+            SwErrors.swSelectionError,
+            {"code": "SELECTION_EMPTY"},
+        )
+
+    try:
+        com(document, "SketchUseEdge2", chain)
+    except Exception as convert_error:  # noqa: BLE001
+        return sw._result(
+            False,
+            f"Convert entities failed: {convert_error}",
+            SwErrors.swSketchError,
+            {"code": "CONVERT_FAILED"},
+        )
+
+    after = _active_sketch_segment_count(document)
+    after = before if after is None else after
+    added = after - before
+    if added <= 0:
+        return sw._result(
+            False,
+            "SolidWorks did not convert the selection; it clears a selection "
+            "it cannot convert. Try one face or a few coherent edges instead "
+            "of many edges at once.",
+            SwErrors.swSketchError,
+            {"code": "CONVERT_FAILED", "selected": selected,
+             "segments_before": before, "segments_after": after},
+        )
+
+    return sw._result(
+        True,
+        f"Converted {added} segment(s) from {selected} selected "
+        f"{'entity' if selected == 1 else 'entities'} into the active sketch.",
+        SwErrors.swSuccess,
+        {
+            "selected": selected,
+            "segments_before": before,
+            "segments_after": after,
+            "added": added,
+            "chain": chain,
+            "unit": unit,
+            "sketch_method": "SketchUseEdge2",
         },
     )

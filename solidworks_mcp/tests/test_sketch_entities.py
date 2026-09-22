@@ -6,10 +6,11 @@ from solidworks_mcp.constants import SwErrors
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_entities import (
-    draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
-    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_equation_curve,
-    draw_parallelogram, draw_parabola, draw_point, draw_rectangle_3point_center,
-    draw_rectangle_3point_corner, draw_sketch_text, draw_tangent_arc,
+    convert_entities, draw_arc_slot, draw_arc_slot_3point,
+    draw_center_rectangle, draw_centerline, draw_circle_radius, draw_ellipse,
+    draw_elliptical_arc, draw_equation_curve, draw_parallelogram, draw_parabola,
+    draw_point, draw_rectangle_3point_center, draw_rectangle_3point_corner,
+    draw_sketch_text, draw_tangent_arc,
 )
 
 
@@ -115,6 +116,29 @@ class SketchText:
         return self.text
 
 
+class Extension:
+    def __init__(self, document, select_ok=True):
+        self.document = document
+        self.select_ok = select_ok
+        self.select_calls = []
+
+    def SelectByID2(self, name, type_name, x, y, z, append, mark, callout,
+                    options):
+        self.select_calls.append((name, type_name, append, x, y, z))
+        if not self.select_ok:
+            return False
+        self.document.selected.append((type_name, x, y, z))
+        return True
+
+
+class SelectionManager:
+    def __init__(self, document):
+        self.document = document
+
+    def GetSelectedObjectCount2(self, mark):
+        return self.document.selected_count
+
+
 class Document:
     def __init__(self, sketch_result=_DEFAULT_RESULT, linear_unit=0):
         self.linear_unit = linear_unit
@@ -125,6 +149,26 @@ class Document:
         self.text_ok = True
         self.text_registers = True
         self.text_segments = []
+        self.Extension = Extension(self)
+        self.SelectionManager = SelectionManager(self)
+        self.selected = []
+        self.selected_count = 0
+        self.active_sketch = True
+        self.converted_segments = 0
+        self.convert_ok = True
+        self.convert_calls = []
+
+    def SketchUseEdge2(self, chain):
+        self.convert_calls.append(chain)
+        if not self.convert_ok:
+            return False
+        for _ in range(self.converted_segments):
+            self.segments.append(Segment(0))
+        return True
+
+    def ClearSelection2(self, clear_all):
+        self.selected = []
+        return True
 
     def InsertSketchText(self, x, y, z, text, alignment, flip, mirror,
                          width_factor, spacing):
@@ -140,6 +184,8 @@ class Document:
         return (self.linear_unit, 0)
 
     def GetActiveSketch2(self):
+        if not self.active_sketch:
+            return None
         return Sketch(self)
 
 
@@ -569,6 +615,104 @@ class SketchTextTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(1, len(automation.document.text_calls))
+
+
+class ConvertEntityTests(unittest.TestCase):
+    def test_the_tool_is_registered_as_a_mutation(self):
+        tools = {item.name: item for item in registered_tools()}
+
+        self.assertIn("convert_entities", tools)
+        self.assertIs(OperationClass.MUTATE,
+                      operation_class_for("convert_entities"))
+
+    def test_a_face_point_is_selected_and_the_growth_proves_it(self):
+        automation = Automation()
+        automation.document.converted_segments = 4
+
+        result = convert_entities(automation, faces=[[1, 2, 3]], unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(4, result["data"]["added"])
+        self.assertEqual(4, result["data"]["segments_after"])
+        self.assertEqual(["FACE"], [call[1] for call
+                                    in automation.document.Extension.select_calls])
+        self.assertEqual((0.001, 0.002, 0.003),
+                         automation.document.Extension.select_calls[0][3:6])
+
+    def test_edges_are_selected_after_faces(self):
+        automation = Automation()
+        automation.document.converted_segments = 5
+
+        result = convert_entities(automation, faces=[[1, 0, 0]],
+                                  edges=[[0, 0, 0]], unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(["FACE", "EDGE"],
+                         [call[1] for call
+                          in automation.document.Extension.select_calls])
+        self.assertEqual(5, result["data"]["segments_after"])
+
+    def test_a_selection_solidworks_cannot_convert_is_a_failure(self):
+        automation = Automation()  # the conversion adds nothing
+
+        result = convert_entities(automation, faces=[[0, 0, 0]], unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CONVERT_FAILED", result["data"]["code"])
+
+    def test_an_empty_selection_is_a_failure(self):
+        automation = Automation()
+        automation.document.Extension.select_ok = False
+
+        result = convert_entities(automation, faces=[[0, 0, 0]], unit="mm")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SELECTION_EMPTY", result["data"]["code"])
+
+    def test_use_selection_needs_something_selected(self):
+        automation = Automation()
+        automation.document.selected_count = 0
+
+        result = convert_entities(automation, use_selection=True)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SELECTION_EMPTY", result["data"]["code"])
+
+    def test_use_selection_converts_the_current_selection(self):
+        automation = Automation()
+        automation.document.selected_count = 1
+        automation.document.converted_segments = 4
+
+        result = convert_entities(automation, use_selection=True)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([], automation.document.Extension.select_calls)
+        self.assertEqual(1, result["data"]["selected"])
+
+    def test_no_open_sketch_is_reported(self):
+        automation = Automation()
+        automation.document.active_sketch = False
+
+        result = convert_entities(automation, use_selection=True)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("NO_ACTIVE_SKETCH", result["data"]["code"])
+
+    def test_validation_happens_before_com(self):
+        cases = ({"use_selection": True, "faces": [[0, 0, 0]]},
+                 {},
+                 {"faces": [[0, 0]]},
+                 {"faces": [[0, 0, "a"]]},
+                 {"faces": "face"},
+                 {"chain": "yes", "edges": [[0, 0, 0]]})
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                automation = Automation()
+
+                result = convert_entities(automation, **arguments)
+
+                self.assertFalse(result["success"])
+                self.assertEqual([], automation.document.Extension.select_calls)
 
 
 if __name__ == "__main__":

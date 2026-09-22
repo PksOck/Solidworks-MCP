@@ -20,6 +20,7 @@ from . import reference_geometry  # noqa: F401
 from . import advanced_features  # noqa: F401
 from . import sketch_edit  # noqa: F401
 from . import sketch_entities  # noqa: F401
+from . import sketch_create  # noqa: F401
 from . import drawing_annotations  # noqa: F401
 from . import saving  # noqa: F401
 from . import imports  # noqa: F401

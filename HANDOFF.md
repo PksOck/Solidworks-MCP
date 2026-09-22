@@ -42,8 +42,8 @@ ordered backlog:
 |---|---|---|
 | M1.1 | Sketch entities | done: 21 entity tools plus the equation-driven curve, all live-verified in one sequence |
 | M1.2 | Sketch editing | slices 1–3 done: fillet, chamfer, offset, mirror, split, linear and circular patterns, scale, construction toggle, rotate |
-| M1.3 | Sketch relations, dimensions and text | done (add/list/delete/status/dimension/text) |
-| M1.4 | Sketch on reference plane / 3D sketch | not started |
+| M1.3 | Sketch relations, dimensions and text | done (add/list/delete relations, status, driving dimension, sketch text) |
+| M1.4 | Sketching on model geometry and 3D sketches | done (plane, 3D sketch, convert entities); 3D equation curve still open |
 | M2 | Part features, bodies, reference geometry, attributes | in progress from older work |
 | M3 | Surface modeling | not started |
 | M4 | Sheet metal, weldments, assembly, drawings, simulation | mixed |
@@ -122,7 +122,8 @@ part, via `solidworks_mcp/tests/live/_scratch.py`
 - trim and extend moved here out of `tests/live/test_documents.py`
 
 Current shape: `test_sketch_entities.py` = 21 entity steps + the equation-driven
-curve + sketch text + a plate profile + the extrusion (25 screenshots);
+curve + sketch text + a plate profile + the extrusion + a sketch on the Right
+Plane + converted model face and edge + a 3D sketch (28 screenshots);
 `test_sketch_edit.py` = 26 edit, pattern, relation and dimension steps
 (26 screenshots). The step that rotates a
 profile and extrudes it is the rigorous one: it asserts the 40x20 profile
@@ -155,9 +156,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after M1.3: 98 requirements —
-83 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(58 verified live).
+Status after M1.4: 101 requirements —
+86 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(61 verified live).
 
 ## Sketch relations (M1.3, slice 1)
 
@@ -238,9 +239,11 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M1.4 sketching on model geometry — this is also what unblocks
-   `convert_entities` (`SketchUseEdge3` needs model edges selected) and the 3D
-   `CreateEquationSpline2`
+1. M1.4 remainder: the 3D equation-driven curve
+   (`ISketchManager.CreateEquationSpline2(XExpression, YExpression,
+   ZExpression, RangeStart, RangeEnd, IsAngleRange, RotationAngle, XOffset,
+   YOffset, LockStart, LockEnd)`, backlog B24) inside the new 3D sketch
+2. M2 part features, in the plan's order
 
 ## Known traps (do not relearn)
 
@@ -294,6 +297,16 @@ Recommended next items, in the plan's order:
 - `sgFIXED` does not make a sketch fully defined: the status stays
   `under_constrained` (2) even after a rebuild. A driving dimension reaches 3.
 - A sketch that is created and exited **without geometry is deleted again**.
+- A 3D sketch is a `3DProfileFeature`, not a `ProfileFeature`, so any helper
+  that looks for `ProfileFeature` misses it. `ISketch.Is3D` is the check.
+- `Insert3DSketch2(True)` and `InsertSketch2(True)` both return `None`; verify
+  through `GetActiveSketch2()` and `Is3D()`, never through the return value.
+- Convert Entities (`SketchUseEdge2(Chain)`) **silently rejects** a selection it
+  cannot convert: it returns `True`, converts nothing and clears the selection.
+  One face (its loop) or a few coherent edges convert fine; all 12 edges of a
+  body at once convert nothing. Prove it by the sketch segment count growing.
+- Points exactly on a body **corner** are ambiguous for `SelectByID2`; use the
+  middle of a face or of an edge.
   Read the sketch name right after `create_sketch`, never after exiting it.
 - Setting a COM property needs a plain attribute assignment (`comutil.set_com`);
   `com(obj, "Member", value)` dispatches a property *get* with an argument and

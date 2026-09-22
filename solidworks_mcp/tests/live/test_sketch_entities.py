@@ -12,11 +12,15 @@ import unittest
 
 from solidworks_mcp.comutil import com
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
+from solidworks_mcp.tools.sketch_create import (
+    create_3d_sketch, create_sketch_on_plane,
+)
 from solidworks_mcp.tools.sketch_entities import (
-    draw_arc_slot, draw_arc_slot_3point, draw_center_rectangle, draw_centerline,
-    draw_circle_radius, draw_ellipse, draw_elliptical_arc, draw_equation_curve,
-    draw_parallelogram, draw_parabola, draw_point, draw_rectangle_3point_center,
-    draw_rectangle_3point_corner, draw_sketch_text, draw_tangent_arc,
+    convert_entities, draw_arc_slot, draw_arc_slot_3point,
+    draw_center_rectangle, draw_centerline, draw_circle_radius, draw_ellipse,
+    draw_elliptical_arc, draw_equation_curve, draw_parallelogram, draw_parabola,
+    draw_point, draw_rectangle_3point_center, draw_rectangle_3point_corner,
+    draw_sketch_text, draw_tangent_arc,
 )
 
 
@@ -40,6 +44,9 @@ class LiveSketchEntityTests(ScratchPartTestCase):
         self._equation_curve_step(len(cases) + 1)
         self._text_step(len(cases) + 2)
         self._plate_step(len(cases) + 3)
+        self._plane_step(len(cases) + 5)
+        self._convert_step(len(cases) + 6)
+        self._sketch_3d_step(len(cases) + 7)
         self.assert_unsaved()
 
     def _step(self, index, purpose, plane, calls, expectations):
@@ -230,6 +237,66 @@ class LiveSketchEntityTests(ScratchPartTestCase):
         self.assertEqual(2, len(segments))
         for segment in segments:
             self.assertEqual(4, int(com(segment, "GetType")))
+
+    def _plane_step(self, index):
+        """A sketch on the Right Plane, not on the Front plane the rest uses."""
+        ox, oy = zone(0, 6)
+        result = create_sketch_on_plane(self.automation, "Right Plane")
+        self.assertTrue(result["success"], result["message"])
+        sketch = result["data"]["sketch"]
+        self.assertFalse(result["data"]["is_3d"])
+
+        drawn = self.automation.draw_line(ox - 25, oy, ox + 25, oy, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+
+        self.assertEqual(1, self.segment_count(sketch))
+        self.capture(index, "sketch on the right plane")
+
+    def _convert_step(self, index):
+        """Convert a model face, then a single model edge, into a sketch."""
+        box = self.body_box_mm()[0]
+        mid_x = (box[0] + box[3]) / 2.0
+        mid_z = (box[2] + box[5]) / 2.0
+        # Middle of the +Y face: a plain rectangle, clear of the holes.
+        face_point = [mid_x, box[4], mid_z]
+        edge_point = [box[3], box[4], mid_z]
+
+        entered = self.automation.create_sketch_on_face(*face_point, unit="mm")
+        self.assertTrue(entered["success"], entered["message"])
+        converted = convert_entities(self.automation, faces=[face_point],
+                                     unit="mm")
+        self.assertTrue(converted["success"], converted["message"])
+        self.assertEqual(4, converted["data"]["added"])
+        self.capture(index, "converted a model face")
+        self.exit_sketch()
+
+        # A single edge, converted into a fresh empty sketch.
+        entered = self.automation.create_sketch_on_face(*face_point, unit="mm")
+        self.assertTrue(entered["success"], entered["message"])
+        single = convert_entities(self.automation, edges=[edge_point],
+                                  unit="mm")
+        self.assertTrue(single["success"], single["message"])
+        self.assertEqual(1, single["data"]["added"])
+        self.exit_sketch()
+
+    def _sketch_3d_step(self, index):
+        """A 3D sketch accepts world coordinates and survives being closed."""
+        result = create_3d_sketch(self.automation)
+        self.assertTrue(result["success"], result["message"])
+        self.assertTrue(result["data"]["is_3d"])
+        sketch = result["data"]["sketch"]
+
+        line = com(com(self.document(), "SketchManager"), "CreateLine",
+                   0.0, 0.0, 0.0, 20.0 * 0.001, 30.0 * 0.001, 40.0 * 0.001)
+        self.assertIsNotNone(line)
+        self.assertEqual(1, self.segment_count(sketch))
+        self.capture(index, "3d sketch with a spatial line")
+        self.exit_sketch()
+
+        closed = self.sketch(sketch)
+        self.assertTrue(bool(com(closed, "Is3D")))
+        self.assertEqual(1, self.segment_count(sketch))
 
     def _plate_step(self, index):
         """One closed plate profile with five holes, then a boss extrusion."""
