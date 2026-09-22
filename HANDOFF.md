@@ -6,7 +6,7 @@ Updated: 2026-09-22
 
 - Repository: `C:\Users\Jan\Documents\Claude-Solidworks mcp`
 - Branch: `additional-upgrades`
-- Latest implementation commit: `29d9b8e` (`feat: add seven verified sketch editing tools`)
+- Latest implementation commit: `3f8787e` (`feat: scale, construction toggle and closed-entity split for sketches`)
 - Do not push to a remote unless the user explicitly asks.
 - SolidWorks 2025 SP1.1 must be running for the opt-in live COM tests.
 
@@ -218,6 +218,8 @@ Always use explicit `git add -- <files>` rather than `git add .`.
 ## Recent local commits
 
 ```text
+3f8787e feat: scale, construction toggle and closed-entity split for sketches
+d1819f4 test: run the sketch live tests as one sliced sequence per part
 29d9b8e feat: add seven verified sketch editing tools
 ed41f5f docs: record the tangent arc and arc slot slice in the handoff
 d4a084b feat: add tangent arc and arc slot sketch entities
