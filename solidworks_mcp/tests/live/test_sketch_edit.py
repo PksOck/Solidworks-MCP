@@ -11,7 +11,8 @@ import unittest
 
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_edit import (
-    extend_entities, offset_entities, rotate_entities, scale_entities,
+    add_sketch_relation, delete_sketch_relations, extend_entities,
+    get_sketch_relations, offset_entities, rotate_entities, scale_entities,
     sketch_chamfer, sketch_fillet, sketch_mirror, sketch_pattern_circular,
     sketch_pattern_linear, split_entities, toggle_construction, trim_entities,
 )
@@ -82,6 +83,8 @@ class LiveSketchEditTests(ScratchPartTestCase):
             ("return one entity to normal geometry", self._construction_off),
             ("rotate the selected entities", self._rotate),
             ("rotate a profile and extrude it", self._rotate_and_extrude),
+            ("add, re-add and delete sketch relations", self._relations),
+            ("relation added and status reported", self._relation_status),
         ]
 
     # -- fillet and chamfer ------------------------------------------------
@@ -341,6 +344,62 @@ class LiveSketchEditTests(ScratchPartTestCase):
         # The 40 mm edge now runs along the axis the 20 mm edge used to hold.
         self.assertAlmostEqual(20.0, box[4] - box[1], places=3)
         self.assertAlmostEqual(40.0, box[5] - box[2], places=3)
+
+    # -- relation steps ----------------------------------------------------
+    def _relations(self):
+        """Two non-parallel lines: add one, re-add (ignored), delete all."""
+        ox, oy = zone(2, 5)
+        sketch = self.new_sketch()
+        first = self.automation.draw_line(ox - 30, oy - 20, ox - 10, oy + 10, "mm")
+        second = self.automation.draw_line(ox + 10, oy - 20, ox + 30, oy - 5, "mm")
+        self.assertTrue(first["success"], first["message"])
+        self.assertTrue(second["success"], second["message"])
+        self.exit_sketch()
+
+        before = self._result(get_sketch_relations(self.automation, sketch))
+        self.assertNotIn("parallel", before["data"]["relation_counts"])
+
+        self._result(add_sketch_relation(self.automation, sketch,
+                                         ["Line1", "Line2"], "parallel"))
+
+        after = self._result(get_sketch_relations(self.automation, sketch))
+        self.assertEqual(1, after["data"]["relation_counts"].get("parallel"))
+        self.assertEqual(before["data"]["relation_count"] + 1,
+                         after["data"]["relation_count"])
+
+        # SolidWorks ignores a relation the geometry already satisfies, and the
+        # tool reports that instead of pretending it worked.
+        redundant = add_sketch_relation(self.automation, sketch,
+                                        ["Line1", "Line2"], "parallel")
+        self.assertFalse(redundant["success"], redundant["message"])
+        self.assertEqual("RELATION_NOT_ADDED", redundant["data"]["code"])
+
+        self._result(delete_sketch_relations(self.automation, sketch, all=True))
+        cleared = self._result(get_sketch_relations(self.automation, sketch))
+        self.assertEqual(0, cleared["data"]["relation_count"])
+
+    def _relation_status(self):
+        """A fixed line still reports under-constrained in SW 2025 SP1.1.
+
+        Measured: adding sgFIXED changes the relation list (type 17 appears) but
+        GetConstrainedStatus stays 2 (under).  A driving dimension is what makes
+        this sketch fully defined; see the dimension step.
+        """
+        ox, oy = zone(3, 5)
+        sketch = self.new_sketch()
+        line = self.automation.draw_line(ox - 25, oy, ox + 25, oy, "mm")
+        self.assertTrue(line["success"], line["message"])
+        self.exit_sketch()
+
+        before = self._result(get_sketch_relations(self.automation, sketch))
+        self.assertFalse(before["data"]["fully_defined"])
+        self._result(add_sketch_relation(self.automation, sketch, ["Line1"],
+                                         "fixed"))
+        after = self._result(get_sketch_relations(self.automation, sketch))
+
+        self.assertIn("fixed", after["data"]["relation_counts"])
+        self.assertEqual("under_constrained", after["data"]["constrained_status"])
+        self.assertFalse(after["data"]["fully_defined"])
 
     def _circular_top_plane(self):
         """A top-plane sketch is deliberately placed clear of the front grid."""

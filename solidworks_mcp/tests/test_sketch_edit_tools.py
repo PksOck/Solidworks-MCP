@@ -4,10 +4,27 @@ import unittest
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_edit import (
+    add_sketch_relation, delete_sketch_relations, get_sketch_relations,
     offset_entities, rotate_entities, scale_entities, sketch_chamfer,
     sketch_fillet, sketch_mirror, sketch_pattern_circular,
     sketch_pattern_linear, split_entities, toggle_construction,
 )
+
+# swConstraintType_e values for the legacy relation strings, written out here so
+# the test does not read the table it is meant to pin down.
+TYPE_BY_RELATION_STRING = {
+    "sgHORIZONTAL": 4,
+    "sgVERTICAL": 5,
+    "sgTANGENT": 6,
+    "sgPARALLEL": 7,
+    "sgPERPENDICULAR": 8,
+    "sgCOINCIDENT": 9,
+    "sgCONCENTRIC": 10,
+    "sgSYMMETRIC": 11,
+    "sgSAMELENGTH": 14,
+    "sgFIXED": 17,
+    "sgCOLINEAR": 27,
+}
 
 
 class Segment:
@@ -48,6 +65,46 @@ class Sketch:
     @property
     def ModelToSketchTransform(self):
         return self.document.transform_object
+
+    @property
+    def RelationManager(self):
+        return self.document.relation_manager
+
+    def GetConstrainedStatus(self):
+        return self.document.constrained_status
+
+
+class Relation:
+    def __init__(self, type_id):
+        self.type_id = type_id
+
+    def GetRelationType(self):
+        return self.type_id
+
+
+class RelationManager:
+    def __init__(self, document):
+        self.document = document
+        self.delete_all_calls = 0
+        self.delete_calls = []
+
+    def GetRelations(self, filter_type):
+        return list(self.document.relations)
+
+    def GetRelationsCount(self, filter_type):
+        return len(self.document.relations)
+
+    def DeleteRelation(self, relation):
+        self.delete_calls.append(relation)
+        if relation in self.document.relations:
+            self.document.relations.remove(relation)
+            return True
+        return False
+
+    def DeleteAllRelations(self):
+        self.delete_all_calls += 1
+        self.document.relations = []
+        return True
 
 
 class Transform:
@@ -142,11 +199,15 @@ class Extension:
         self.select_calls.append((name, type_name, append))
         if not self.select_ok:
             return False
+        if type_name == "SKETCHPOINT":
+            entity = self.document.points_by_name.get(name)
+        else:
+            entity = self.document.segments_by_name.get(name)
+        if entity is None:
+            return False
         if not append:
             self.document.selected = []
-        segment = self.document.segments_by_name.get(name)
-        if segment is not None:
-            self.document.selected.append(segment)
+        self.document.selected.append(entity)
         return True
 
 
@@ -177,6 +238,18 @@ class Document:
         self.mirror_calls = 0
         self.scale_calls = []
         self.rotate_calls = []
+        self.constrained_status = 3
+        self.relations = [Relation(4), Relation(4), Relation(9)]
+        self.relation_manager = RelationManager(self)
+        self.points_by_name = {"Point1": Segment(0.0, type_code=2)}
+        self.constraint_calls = []
+
+    def SketchAddConstraints(self, constraint_string):
+        self.constraint_calls.append(constraint_string)
+        if self.changes:
+            self.relations.append(
+                Relation(TYPE_BY_RELATION_STRING.get(constraint_string, 0)))
+        return None
 
     def GetType(self):
         return 1
@@ -184,6 +257,9 @@ class Document:
     def EditSketch(self):
         self.edit_calls += 1
         return None
+
+    def GetActiveSketch2(self):
+        return self.sketch.sketch_object
 
     def InsertSketch2(self, update_edit_rebuild):
         self.insert_sketch_calls.append(update_edit_rebuild)
@@ -255,7 +331,7 @@ class RegistrationTests(unittest.TestCase):
             "sketch_fillet", "sketch_chamfer", "offset_entities",
             "sketch_mirror", "split_entities", "sketch_pattern_linear",
             "sketch_pattern_circular", "scale_entities", "toggle_construction",
-            "rotate_entities",
+            "rotate_entities", "add_sketch_relation", "delete_sketch_relations",
         ):
             with self.subTest(tool=name):
                 self.assertIn(name, tools)
@@ -826,6 +902,129 @@ class RotateTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("ROTATE_FAILED", result["data"]["code"])
+
+
+class SketchRelationTests(unittest.TestCase):
+    def test_add_relation_sends_the_legacy_string_and_proves_the_change(self):
+        automation = Automation()
+        automation.document.relations = []
+
+        result = add_sketch_relation(automation, "Sketch1", ["Line1", "Line2"],
+                                     "parallel")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(["sgPARALLEL"], automation.document.constraint_calls)
+        self.assertEqual(["parallel"], result["data"]["relations"])
+        self.assertEqual(1, result["data"]["relation_count"])
+        self.assertEqual(1, len(automation.document.relations))
+
+    def test_a_redundant_relation_is_reported_as_a_failure(self):
+        automation = Automation()
+        automation.document.changes = False
+
+        result = add_sketch_relation(automation, "Sketch1", ["Line1", "Line2"],
+                                     "parallel")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("RELATION_NOT_ADDED", result["data"]["code"])
+
+    def test_relation_names_map_to_the_verified_strings(self):
+        for relation, expected in (("same_length", "sgSAMELENGTH"),
+                                   ("colinear", "sgCOLINEAR"),
+                                   ("tangent", "sgTANGENT")):
+            with self.subTest(relation=relation):
+                automation = Automation()
+                automation.document.relations = []
+
+                result = add_sketch_relation(automation, "Sketch1", ["Line1"],
+                                             relation)
+
+                self.assertTrue(result["success"], result["message"])
+                self.assertEqual([expected],
+                                 automation.document.constraint_calls)
+
+    def test_an_unknown_relation_and_an_empty_list_never_reach_com(self):
+        for arguments in ({"entities": ["Line1"], "relation": "equal"},
+                          {"entities": [], "relation": "parallel"},
+                          {"entities": ["Line1"], "relation": "same length"}):
+            with self.subTest(arguments=arguments):
+                automation = Automation()
+
+                result = add_sketch_relation(automation, "Sketch1", **arguments)
+
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+                self.assertEqual([], automation.document.constraint_calls)
+
+    def test_get_relations_reports_types_counts_and_the_defined_state(self):
+        automation = Automation()
+        automation.document.relations = [Relation(4), Relation(4), Relation(14)]
+        automation.document.constrained_status = 3
+
+        result = get_sketch_relations(automation, "Sketch1")
+
+        self.assertTrue(result["success"], result["message"])
+        data = result["data"]
+        self.assertEqual(3, data["relation_count"])
+        self.assertEqual({"horizontal": 2, "same_length": 1},
+                         data["relation_counts"])
+        self.assertEqual("fully_constrained", data["constrained_status"])
+        self.assertTrue(data["fully_defined"])
+        self.assertTrue(all(entry["type_id"] in (4, 14)
+                            for entry in data["relations"]))
+
+    def test_get_relations_flags_an_under_constrained_sketch(self):
+        automation = Automation()
+        automation.document.constrained_status = 2
+
+        result = get_sketch_relations(automation, "Sketch1")
+
+        self.assertFalse(result["data"]["fully_defined"])
+        self.assertEqual("under_constrained", result["data"]["constrained_status"])
+
+    def test_delete_all_relations_deletes_and_reports_the_remainder(self):
+        automation = Automation()
+
+        result = delete_sketch_relations(automation, "Sketch1", all=True)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(1, automation.document.relation_manager
+                         .delete_all_calls)
+        self.assertEqual([], automation.document.relations)
+        self.assertEqual(0, result["data"]["relation_count"])
+
+    def test_deleting_one_relation_type_leaves_the_others(self):
+        automation = Automation()
+        automation.document.relations = [Relation(4), Relation(7), Relation(4)]
+
+        result = delete_sketch_relations(automation, "Sketch1",
+                                         relation="horizontal")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([7], [relation.type_id
+                               for relation in automation.document.relations])
+        self.assertEqual(1, result["data"]["relation_count"])
+
+    def test_delete_needs_exactly_one_target(self):
+        for arguments in ({}, {"all": True, "relation": "parallel"}):
+            with self.subTest(arguments=arguments):
+                automation = Automation()
+
+                result = delete_sketch_relations(automation, "Sketch1",
+                                                 **arguments)
+
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+
+    def test_deleting_a_relation_that_is_not_there_is_a_failure(self):
+        automation = Automation()
+        automation.document.relations = [Relation(7)]
+
+        result = delete_sketch_relations(automation, "Sketch1",
+                                         relation="horizontal")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("RELATION_NOT_DELETED", result["data"]["code"])
 
 
 if __name__ == "__main__":

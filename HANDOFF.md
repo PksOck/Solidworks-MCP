@@ -42,7 +42,7 @@ ordered backlog:
 |---|---|---|
 | M1.1 | Sketch entities | done: 21 entity tools plus the equation-driven curve, all live-verified in one sequence |
 | M1.2 | Sketch editing | slices 1–3 done: fillet, chamfer, offset, mirror, split, linear and circular patterns, scale, construction toggle, rotate |
-| M1.3 | Sketch relations and dimensions | not started |
+| M1.3 | Sketch relations and dimensions | relations done (add/list/delete/status); dimensions and sketch text next |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
 | M2 | Part features, bodies, reference geometry, attributes | in progress from older work |
 | M3 | Surface modeling | not started |
@@ -123,9 +123,9 @@ part, via `solidworks_mcp/tests/live/_scratch.py`
 
 Current shape: `test_sketch_entities.py` = 21 entity steps + the equation-driven
 curve + a plate profile + the extrusion (24 screenshots); `test_sketch_edit.py`
-= 23 edit and pattern steps (23 screenshots). The step that rotates a profile
-and extrudes it is the rigorous one: it asserts the 40x20 profile **swaps its
-axes** in `GetBodyBox`, which no length-based check can see.
+= 25 edit, pattern and relation steps (25 screenshots). The step that rotates a
+profile and extrudes it is the rigorous one: it asserts the 40x20 profile
+**swaps its axes** in `GetBodyBox`, which no length-based check can see.
 
 When a step ends in a feature, prove success by **volume**, not by body count:
 a single sketch with several closed loops extrudes all of them, but a body count
@@ -154,9 +154,34 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 92 requirements —
-77 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(52 verified live).
+Status after this slice: 96 requirements —
+81 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(56 verified live).
+
+## Sketch relations (M1.3, slice 1)
+
+Three tools in `solidworks_mcp/tools/sketch_edit.py` (they reuse the sketch
+open/select/verify machinery): `add_sketch_relation`, `get_sketch_relations`
+(read-only) and `delete_sketch_relations`. Details in `docs/api-findings.md`
+section 27.
+
+- Adding goes through the legacy `IModelDoc2.SketchAddConstraints("<sg name>")`
+  with the entities selected; `ISketchRelationManager.AddRelation` throws
+  `com_error` in this build and `GetAllowedRelations` returns `None` (B25).
+- Verified strings: `sgHORIZONTAL`, `sgVERTICAL`, `sgTANGENT`, `sgPARALLEL`,
+  `sgPERPENDICULAR`, `sgCOINCIDENT`, `sgCONCENTRIC`, `sgSYMMETRIC`,
+  `sgSAMELENGTH`, `sgFIXED`, `sgCOLINEAR`. Equal length **and** equal radius are
+  `sgSAMELENGTH`; `sgEQUAL` does not exist here; `sgCOLINEAR` has a single L.
+  Midpoint (`sgMIDPOINT`, `sgATMIDDLE`) is ignored (B26).
+- SolidWorks silently ignores a relation the geometry already satisfies, so the
+  tool proves success with the **relation list**, never the return value, and
+  reports `RELATION_NOT_ADDED` for a redundant request.
+- `get_sketch_relations` reports `constrained_status` (swConstrainedStatus_e)
+  and `fully_defined`. Measured: `sgFIXED` alone leaves a sketch at
+  `under_constrained` (2) even after a rebuild; a driving dimension is what
+  reaches 3 (fully). Do not claim "fixed means fully defined".
+- `delete_sketch_relations` takes either one relation type or `all: true`;
+  `DeleteRelation` and `DeleteAllRelations` both work.
 
 ## Equation-driven curve (M1.1, finished)
 
@@ -212,8 +237,10 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M1.3 sketch relations and dimensions (`SketchAddConstraints`,
-   `SketchConstraintsDel`, `InsertSketchText`, `AddDimension2` on a sketch)
+1. M1.3 remainder: `add_sketch_dimension` (recipe already verified:
+   `AddDimension2` then `EditRebuild3` then
+   `GetDimension().SetSystemValue2(value, 0)` then `EditRebuild3` again) and
+   `draw_sketch_text` (`InsertSketchText` works and returns `ISketchText`)
 2. M1.4 sketching on model geometry — this is also what unblocks
    `convert_entities` (`SketchUseEdge3` needs model edges selected) and the 3D
    `CreateEquationSpline2`
@@ -252,6 +279,23 @@ Recommended next items, in the plan's order:
 - `CreateEquationSpline` takes the range **and** evaluates the expression in the
   document linear unit, but takes `XOffset`/`YOffset` in **metres**. Mixing
   these up shows as a factor-of-1000 curve, not as an error.
+- `IModelDoc2.AddDimension2` (and `AddAlongXDimension`) leave the **Dimension
+  command running** - `ISldWorks.GetRunningCommandInfo` returns
+  `(17, 'Dimension', True)` and SolidWorks waits for the user to confirm.
+  `EditRebuild3` immediately after the call commits the dimension and clears the
+  command (`(-3, '', False)`); that is the only way found to add a sketch
+  dimension without manual confirmation. Always rebuild right after
+  `AddDimension2`.
+- `ISketchRelationManager.AddRelation` throws `com_error` in SW 2025 and
+  `GetAllowedRelations` returns `None`; add relations with
+  `IModelDoc2.SketchAddConstraints("sg...")` instead.
+- The relation strings are `sgSAMELENGTH` (equal length *and* equal radius) and
+  `sgCOLINEAR` with one L. `sgEQUAL`, `sgSAMERADIUS`, `sgCOLLINEAR`,
+  `sgMIDPOINT` and `sgATMIDDLE` are silently ignored.
+- SolidWorks silently ignores a relation the geometry already satisfies; prove
+  relations through the relation list, never the return value.
+- `sgFIXED` does not make a sketch fully defined: the status stays
+  `under_constrained` (2) even after a rebuild. A driving dimension reaches 3.
 - A sketch that is created and exited **without geometry is deleted again**.
   Read the sketch name right after `create_sketch`, never after exiting it.
 - Setting a COM property needs a plain attribute assignment (`comutil.set_com`);

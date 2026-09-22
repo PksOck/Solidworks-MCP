@@ -194,15 +194,22 @@ def _open_sketch(document, feature):
     return result is not False
 
 
-def _select_segments(document, names):
-    """Select sketch segments by name; the target sketch must be active."""
+def _select_segments(document, names, types=("SKETCHSEGMENT",)):
+    """Select sketch entities by name; the target sketch must be active.
+
+    ``types`` allows a caller to select a sketch *point* (``SKETCHPOINT``)
+    instead of a segment; each name is tried against every type in turn.
+    """
     empty_callout = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
     for position, name in enumerate(names):
-        selected = com(
-            document.Extension, "SelectByID2", name, "SKETCHSEGMENT",
-            0.0, 0.0, 0.0, position > 0, 0, empty_callout, 0,
-        )
-        if not selected:
+        for type_name in types:
+            selected = com(
+                document.Extension, "SelectByID2", name, type_name,
+                0.0, 0.0, 0.0, position > 0, 0, empty_callout, 0,
+            )
+            if selected:
+                break
+        else:
             return False
     return True
 
@@ -214,7 +221,7 @@ def _invalid(sw, message):
 
 def _edit_and_verify(sw, document, feature, names, action, call, failure_code,
                      failure_label, require_change=False, prepare=None,
-                     observe=None):
+                     observe=None, types=("SKETCHSEGMENT",), unchanged_note=None):
     """Run one sketch-manager edit, then prove it changed the sketch geometry.
 
     ``prepare`` is called once the entities are selected and may fill a context
@@ -223,8 +230,11 @@ def _edit_and_verify(sw, document, feature, names, action, call, failure_code,
 
     ``observe`` takes ``(document, feature)`` and returns the snapshot used to
     prove a change; it defaults to the segment lengths. Edits that alter
-    something other than length (construction state, for example) pass their
-    own observer.
+    something other than length (construction state, the relation list) pass
+    their own observer.
+
+    ``types`` lists the selection types tried for each name, and
+    ``unchanged_note`` replaces the trailing explanation when nothing changed.
     """
     snapshot = observe or _segment_lengths
     before = snapshot(document, feature)
@@ -233,7 +243,7 @@ def _edit_and_verify(sw, document, feature, names, action, call, failure_code,
                           SwErrors.swSelectionError)
 
     try:
-        if not _select_segments(document, names):
+        if not _select_segments(document, names, types):
             return sw._result(
                 False,
                 "Could not select all requested sketch entities. Check the "
@@ -258,8 +268,8 @@ def _edit_and_verify(sw, document, feature, names, action, call, failure_code,
     if not changed and (require_change or not applied):
         return sw._result(
             False,
-            f"SolidWorks did not {action} {', '.join(names)}; the sketch "
-            "geometry is unchanged.",
+            f"SolidWorks did not {action} {', '.join(names)}; "
+            f"{unchanged_note or 'the sketch geometry is unchanged'}.",
             SwErrors.swFeatureError,
             {"code": failure_code},
         )
@@ -1356,6 +1366,288 @@ def sketch_pattern_circular(sw, sketch, entities, count, center_x=0, center_y=0,
             "arc_radius_meters": computed["radius"],
             "arc_angle_deg": math.degrees(computed["arc_angle"]),
             "spacing_radians": computed["spacing"],
+            "geometry_changed": changed,
+        },
+    )
+
+
+# SketchAddConstraints takes these legacy strings; verified live one by one in
+# SW 2025 SP1.1 (docs/api-findings.md section 27). Note the one-L "sgCOLINEAR"
+# and that "sgEQUAL" does not exist in this build - equal length and equal
+# radius are both "sgSAMELENGTH".
+SKETCH_RELATION_STRINGS = {
+    "horizontal": "sgHORIZONTAL",
+    "vertical": "sgVERTICAL",
+    "tangent": "sgTANGENT",
+    "parallel": "sgPARALLEL",
+    "perpendicular": "sgPERPENDICULAR",
+    "coincident": "sgCOINCIDENT",
+    "concentric": "sgCONCENTRIC",
+    "symmetric": "sgSYMMETRIC",
+    "same_length": "sgSAMELENGTH",
+    "fixed": "sgFIXED",
+    "colinear": "sgCOLINEAR",
+}
+
+# swConstraintType_e -> relation name, for reporting.
+SKETCH_RELATION_LABELS = {
+    4: "horizontal",
+    5: "vertical",
+    6: "tangent",
+    7: "parallel",
+    8: "perpendicular",
+    9: "coincident",
+    10: "concentric",
+    11: "symmetric",
+    14: "same_length",
+    17: "fixed",
+    27: "colinear",
+}
+
+# swConstrainedStatus_e.
+SKETCH_CONSTRAINED_STATUS = {
+    1: "unknown",
+    2: "under_constrained",
+    3: "fully_constrained",
+    4: "over_constrained",
+    5: "no_solution",
+    6: "invalid_solution",
+    7: "autosolve_off",
+}
+
+
+def _relation_reader(feature):
+    """An ISketchRelationManager for a sketch feature, open or closed."""
+    sketch = com(feature, "GetSpecificFeature2")
+    if sketch is None:
+        return None, None
+    manager = com(sketch, "RelationManager")
+    return sketch, manager
+
+
+def _sketch_relations(document, feature):
+    """(constrained status id, sorted relation type ids) of a sketch."""
+    sketch, manager = _relation_reader(feature)
+    if manager is None:
+        return None
+    types = []
+    for relation in list(com(manager, "GetRelations", 0) or []):
+        try:
+            types.append(int(com(relation, "GetRelationType")))
+        except Exception:  # noqa: BLE001
+            continue
+    return (int(com(sketch, "GetConstrainedStatus")), tuple(sorted(types)))
+
+
+def _delete_relations(document, relation_key):
+    """Delete every relation, or only those of one type, in the active sketch."""
+    manager = com(com(document, "GetActiveSketch2"), "RelationManager")
+    if manager is None:
+        return False
+    if relation_key is None:
+        return bool(com(manager, "DeleteAllRelations"))
+    wanted = SKETCH_RELATION_LABELS.items()
+    wanted_id = next(identifier for identifier, label in wanted
+                     if label == relation_key)
+    removed = False
+    for relation in list(com(manager, "GetRelations", 0) or []):
+        if int(com(relation, "GetRelationType")) == wanted_id:
+            if com(manager, "DeleteRelation", relation):
+                removed = True
+    return removed
+
+
+@tool(
+    name="add_sketch_relation",
+    description=(
+        "Add one geometric relation (constraint) to entities inside a named "
+        "sketch. Entities are given by their exact sketch names (Line1, Arc1, "
+        "Point1) and are selected as segments or sketch points automatically. "
+        "SolidWorks silently ignores a relation the geometry already "
+        "satisfies, and that is reported as a failure. Relations: "
+        "horizontal, vertical, tangent, parallel, perpendicular, coincident, "
+        "concentric, symmetric, same_length, fixed, colinear."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"},
+                     "minItems": 1},
+        "relation": {"type": "string", "enum": sorted(SKETCH_RELATION_STRINGS)},
+    }, "required": ["sketch", "entities", "relation"]},
+    operation_class=OperationClass.MUTATE,
+)
+def add_sketch_relation(sw, sketch, entities, relation):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    names = _clean_names(entities)
+    if names is None:
+        return _invalid(sw, "entities must be one or more distinct non-empty "
+                            "entity names.")
+
+    key = relation.strip().casefold() if isinstance(relation, str) else None
+    if key not in SKETCH_RELATION_STRINGS:
+        return _invalid(sw, f"relation must be one of: "
+                            f"{', '.join(sorted(SKETCH_RELATION_STRINGS))}.")
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    changed = _edit_and_verify(
+        sw, document, feature, names,
+        action=f"add the {key} relation to",
+        call=lambda _context: com(document, "SketchAddConstraints",
+                                  SKETCH_RELATION_STRINGS[key]),
+        failure_code="RELATION_NOT_ADDED",
+        failure_label=f"{key} relation",
+        require_change=True,
+        observe=_sketch_relations,
+        types=("SKETCHSEGMENT", "SKETCHPOINT"),
+        unchanged_note=("the relation list did not change, which is how "
+                        "SolidWorks ignores a relation the geometry already "
+                        "satisfies"),
+    )
+    if isinstance(changed, dict):
+        return changed
+
+    status = _sketch_relations(document, feature)
+    new_relations = []
+    if status is not None:
+        new_relations = [SKETCH_RELATION_LABELS.get(identifier, str(identifier))
+                         for identifier in status[1]]
+    return sw._result(
+        True,
+        f"Added the {key} relation to {', '.join(names)} in {sketch}.",
+        SwErrors.swSuccess,
+        {
+            "sketch": sketch,
+            "entities": names,
+            "relation": key,
+            "relation_string": SKETCH_RELATION_STRINGS[key],
+            "relations": new_relations,
+            "relation_count": len(new_relations),
+            "geometry_changed": changed,
+        },
+    )
+
+
+@tool(
+    name="get_sketch_relations",
+    description=(
+        "List the relations of a named sketch and report whether it is fully "
+        "defined. Runs on a closed sketch and changes nothing."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+    }, "required": ["sketch"]},
+    operation_class=OperationClass.READ,
+)
+def get_sketch_relations(sw, sketch):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    state = _sketch_relations(document, feature)
+    if state is None:
+        return sw._result(False, f"Could not read the relations of {sketch}.",
+                          SwErrors.swSketchError)
+    status, types = state
+    relations = [{"type_id": identifier,
+                  "relation": SKETCH_RELATION_LABELS.get(identifier,
+                                                         str(identifier))}
+                 for identifier in types]
+    counts = {}
+    for identifier in types:
+        label = SKETCH_RELATION_LABELS.get(identifier, str(identifier))
+        counts[label] = counts.get(label, 0) + 1
+    return sw._result(
+        True,
+        f"{sketch} has {len(relations)} relation(s) and is "
+        f"{SKETCH_CONSTRAINED_STATUS.get(status, 'unknown').replace('_', ' ')}.",
+        SwErrors.swSuccess,
+        {
+            "sketch": sketch,
+            "relation_count": len(relations),
+            "relations": relations,
+            "relation_counts": counts,
+            "constrained_status_id": status,
+            "constrained_status": SKETCH_CONSTRAINED_STATUS.get(status, "unknown"),
+            "fully_defined": status == 3,
+        },
+    )
+
+
+@tool(
+    name="delete_sketch_relations",
+    description=(
+        "Delete relations from a named sketch: all of them, or every relation "
+        "of one type. Success is confirmed by the relation list changing."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "relation": {"type": "string",
+                     "enum": sorted(SKETCH_RELATION_STRINGS)},
+        "all": {"type": "boolean", "default": False},
+    }, "required": ["sketch"]},
+    operation_class=OperationClass.MUTATE,
+)
+def delete_sketch_relations(sw, sketch, relation=None, all=False):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    if relation is None and not all:
+        return _invalid(sw, "Give a relation to delete, or set all true to "
+                            "delete every relation.")
+    if relation is not None and all:
+        return _invalid(sw, "Give either a relation or all true, not both.")
+
+    key = relation.strip().casefold() if isinstance(relation, str) else None
+    if relation is not None and key not in SKETCH_RELATION_STRINGS:
+        return _invalid(sw, f"relation must be one of: "
+                            f"{', '.join(sorted(SKETCH_RELATION_STRINGS))}.")
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    target = "all relations" if key is None else f"every {key} relation"
+    changed = _edit_and_verify(
+        sw, document, feature, [],
+        action=f"delete {target} from",
+        call=lambda _context: _delete_relations(document, key),
+        failure_code="RELATION_NOT_DELETED",
+        failure_label=f"delete {target}",
+        require_change=True,
+        observe=_sketch_relations,
+        unchanged_note="the relation list did not change; no such relation "
+                       "was present",
+    )
+    if isinstance(changed, dict):
+        return changed
+
+    state = _sketch_relations(document, feature)
+    remaining = 0 if state is None else len(state[1])
+    return sw._result(
+        True,
+        f"Deleted {target} in {sketch}; {remaining} relation(s) remain.",
+        SwErrors.swSuccess,
+        {
+            "sketch": sketch,
+            "deleted": target,
+            "relation_count": remaining,
             "geometry_changed": changed,
         },
     )
