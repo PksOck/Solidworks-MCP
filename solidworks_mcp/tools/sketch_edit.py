@@ -1,10 +1,11 @@
 """Sketch editing operations on existing sketch entities.
 
-Covers trim and extend, sketch fillet and chamfer, offset, mirror, split and the
-linear and circular sketch patterns. Every tool reopens the named sketch for
-edit, applies one ``ISketchManager``/``IModelDoc2`` operation to the selected
-entities, closes the sketch again and confirms success by an observed geometry
-change rather than by the API return value.
+Covers trim and extend, sketch fillet and chamfer, offset, mirror, split,
+construction geometry, scaling and the linear and circular sketch patterns.
+Every tool reopens the named sketch for edit, applies one
+``ISketchManager``/``IModelDoc2`` operation to the selected entities, closes the
+sketch again and confirms success by an observed geometry change rather than by
+the API return value.
 """
 
 import math
@@ -12,7 +13,7 @@ import math
 import pythoncom
 import win32com.client
 
-from ..comutil import com
+from ..comutil import com, set_com
 from ..constants import SwErrors
 from ..core.policy import OperationClass
 from ..registry import tool
@@ -146,6 +147,17 @@ def _segment_lengths(document, feature):
     return lengths
 
 
+def _sketch_segment_construction(document, feature):
+    """Snapshot the construction flag of every segment, for change detection."""
+    sketch = com(feature, "GetSpecificFeature2")
+    if sketch is None:
+        return None
+    flags = []
+    for segment in com(sketch, "GetSketchSegments") or []:
+        flags.append(bool(com(segment, "ConstructionGeometry")))
+    return flags
+
+
 def _open_sketch(document, feature):
     """Select a sketch feature and enter sketch edit mode.
 
@@ -178,14 +190,21 @@ def _invalid(sw, message):
 
 
 def _edit_and_verify(sw, document, feature, names, action, call, failure_code,
-                     failure_label, require_change=False, prepare=None):
+                     failure_label, require_change=False, prepare=None,
+                     observe=None):
     """Run one sketch-manager edit, then prove it changed the sketch geometry.
 
     ``prepare`` is called once the entities are selected and may fill a context
     dictionary that ``call`` then reads; returning a result from ``prepare``
     aborts the edit and that result is passed through to the caller.
+
+    ``observe`` takes ``(document, feature)`` and returns the snapshot used to
+    prove a change; it defaults to the segment lengths. Edits that alter
+    something other than length (construction state, for example) pass their
+    own observer.
     """
-    before = _segment_lengths(document, feature)
+    snapshot = observe or _segment_lengths
+    before = snapshot(document, feature)
     if not _open_sketch(document, feature):
         return sw._result(False, "Could not open sketch for editing.",
                           SwErrors.swSelectionError)
@@ -211,7 +230,7 @@ def _edit_and_verify(sw, document, feature, names, action, call, failure_code,
         com(document, "InsertSketch2", True)
         com(document, "ClearSelection2", True)
 
-    after = _segment_lengths(document, feature)
+    after = snapshot(document, feature)
     changed = before != after
     if not changed and (require_change or not applied):
         return sw._result(
@@ -759,9 +778,10 @@ def sketch_mirror(sw, sketch, entities, mirror_entity):
 @tool(
     name="split_entities",
     description=(
-        "Split one open sketch entity in two at a point on it. Name the entity "
-        "by its exact sketch segment name and give the split point in the "
-        "sketch plane. The sketch is reopened for edit and closed again."
+        "Split one sketch entity in two at points on it. Name the entity by its "
+        "exact sketch segment name. An open entity takes one split point (x, y); "
+        "a closed entity such as a circle takes two (x, y and x2, y2). The "
+        "sketch is reopened for edit and closed again."
     ),
     schema={"type": "object", "properties": {
         "sketch": {"type": "string"},
@@ -769,11 +789,13 @@ def sketch_mirror(sw, sketch, entities, mirror_entity):
                      "minItems": 1, "maxItems": 1},
         "x": {"type": "number"},
         "y": {"type": "number"},
+        "x2": {"type": "number"},
+        "y2": {"type": "number"},
         "unit": UNIT_SCHEMA,
     }, "required": ["sketch", "entities", "x", "y"]},
     operation_class=OperationClass.MUTATE,
 )
-def split_entities(sw, sketch, entities, x, y, unit="mm"):
+def split_entities(sw, sketch, entities, x, y, unit="mm", x2=None, y2=None):
     if not isinstance(sketch, str) or not sketch.strip():
         return _invalid(sw, "sketch must be a non-empty sketch name.")
 
@@ -781,12 +803,99 @@ def split_entities(sw, sketch, entities, x, y, unit="mm"):
     if names is None or len(names) != 1:
         return _invalid(sw, "entities must contain exactly one entity name.")
 
+    if (x2 is None) != (y2 is None):
+        return _invalid(sw, "x2 and y2 must be given together to split a closed "
+                            "entity.")
+
     x_m, error = _convert_length(sw, x, unit, "x")
     if error:
         return error
     y_m, error = _convert_length(sw, y, unit, "y")
     if error:
         return error
+
+    closed = x2 is not None
+    if closed:
+        x2_m, error = _convert_length(sw, x2, unit, "x2")
+        if error:
+            return error
+        y2_m, error = _convert_length(sw, y2, unit, "y2")
+        if error:
+            return error
+    else:
+        x2_m = y2_m = None
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    if closed:
+        def call(_context):
+            return com(document.SketchManager, "SplitClosedSegment",
+                       x_m, y_m, 0.0, x2_m, y2_m, 0.0)
+    else:
+        def call(_context):
+            return com(document.SketchManager, "SplitOpenSegment", x_m, y_m, 0.0)
+
+    changed = _edit_and_verify(
+        sw, document, feature, names,
+        action="split",
+        call=call,
+        failure_code="SPLIT_FAILED",
+        failure_label="Split",
+        require_change=True,
+    )
+    if isinstance(changed, dict):
+        return changed
+
+    pick = [x, y] if not closed else [x, y, x2, y2]
+    return sw._result(
+        True,
+        f"Split {names[0]} in {sketch} at {pick} "
+        f"({'closed' if closed else 'open'} entity).",
+        data={
+            "sketch": sketch,
+            "entities": names,
+            "pick": pick,
+            "closed": closed,
+            "unit": unit,
+            "geometry_changed": changed,
+            "references_invalidated": True,
+        },
+    )
+
+
+@tool(
+    name="scale_entities",
+    description=(
+        "Scale the named sketch entities by a factor. SolidWorks scales about "
+        "the sketch origin and has no scale centre argument, so the entities "
+        "also move unless they are centred on the origin."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "factor": {"type": "number", "exclusiveMinimum": 0},
+    }, "required": ["sketch", "entities", "factor"]},
+    operation_class=OperationClass.MUTATE,
+)
+def scale_entities(sw, sketch, entities, factor):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    names = _clean_names(entities)
+    if names is None:
+        return _invalid(sw, "entities must be one or more distinct non-empty "
+                            "entity names.")
+
+    if not _is_number(factor) or factor <= 0:
+        return _invalid(sw, "factor must be a positive finite number.")
+    if factor == 1:
+        return _invalid(sw, "factor must differ from 1; a factor of 1 changes "
+                            "nothing.")
 
     document, error = _require_part(sw)
     if error:
@@ -797,11 +906,10 @@ def split_entities(sw, sketch, entities, x, y, unit="mm"):
 
     changed = _edit_and_verify(
         sw, document, feature, names,
-        action="split",
-        call=lambda _context: com(document.SketchManager, "SplitOpenSegment",
-                                  x_m, y_m, 0.0),
-        failure_code="SPLIT_FAILED",
-        failure_label="Split",
+        action="scale",
+        call=lambda _context: com(document, "SketchModifyScale", float(factor)),
+        failure_code="SCALE_FAILED",
+        failure_label="Sketch scale",
         require_change=True,
     )
     if isinstance(changed, dict):
@@ -809,12 +917,92 @@ def split_entities(sw, sketch, entities, x, y, unit="mm"):
 
     return sw._result(
         True,
-        f"Split {names[0]} in {sketch} at ({x}, {y}){unit}.",
+        f"Scaled {', '.join(names)} in {sketch} by {factor}.",
         data={
             "sketch": sketch,
             "entities": names,
-            "pick": [x, y],
-            "unit": unit,
+            "factor": factor,
+            "geometry_changed": changed,
+            "references_invalidated": True,
+        },
+    )
+
+
+@tool(
+    name="toggle_construction",
+    description=(
+        "Switch the named sketch entities between normal and construction "
+        "geometry. Pass construction true or false to force one state, or leave "
+        "it out to flip every named entity."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "construction": {"type": "boolean"},
+    }, "required": ["sketch", "entities"]},
+    operation_class=OperationClass.MUTATE,
+)
+def toggle_construction(sw, sketch, entities, construction=None):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    names = _clean_names(entities)
+    if names is None:
+        return _invalid(sw, "entities must be one or more distinct non-empty "
+                            "entity names.")
+
+    if construction is not None and not isinstance(construction, bool):
+        return _invalid(sw, "construction must be true, false or omitted.")
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    def apply(_context):
+        # The property setter is the only path that also turns construction
+        # geometry back off; ISketchManager.CreateConstructionGeometry only
+        # turns it on.
+        manager = com(document, "SelectionManager")
+        for index in range(1, len(names) + 1):
+            segment = com(manager, "GetSelectedObject6", index, -1)
+            if segment is None:
+                raise RuntimeError("a selected sketch entity disappeared")
+            target = construction
+            if target is None:
+                target = not bool(com(segment, "ConstructionGeometry"))
+            set_com(segment, "ConstructionGeometry", bool(target))
+        return True
+
+    changed = _edit_and_verify(
+        sw, document, feature, names,
+        action="toggle the construction state of",
+        call=apply,
+        failure_code="CONSTRUCTION_FAILED",
+        failure_label="Construction toggle",
+        require_change=True,
+        observe=_sketch_segment_construction,
+    )
+    if isinstance(changed, dict):
+        return changed
+
+    if construction is None:
+        message = (f"Flipped the construction state of {', '.join(names)} "
+                   f"in {sketch}.")
+    elif construction:
+        message = f"Marked {', '.join(names)} in {sketch} as construction geometry."
+    else:
+        message = (f"Returned {', '.join(names)} in {sketch} to normal "
+                   "geometry.")
+    return sw._result(
+        True,
+        message,
+        data={
+            "sketch": sketch,
+            "entities": names,
+            "construction": construction,
             "geometry_changed": changed,
             "references_invalidated": True,
         },

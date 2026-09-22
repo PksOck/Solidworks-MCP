@@ -116,6 +116,9 @@ class ScratchPartTestCase(unittest.TestCase):
         path = self.review_dir() / f"{index:02d}-{slug(purpose)}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.unlink(missing_ok=True)
+        # The view was framed while the part was still empty, so re-fit it to
+        # the geometry added so far, otherwise the step is a speck in a corner.
+        com(self.document(), "ViewZoomtofit2")
         result = capture_view(self.automation, orientation="isometric",
                               width=1280, height=960, output_path=str(path))
         self.assertTrue(result["success"], result["message"])

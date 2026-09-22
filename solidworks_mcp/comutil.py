@@ -27,3 +27,15 @@ def com(obj: Any, name: str, *args) -> Any:
     """
     value = getattr(obj, name)
     return value(*args) if inspect.ismethod(value) else value
+
+
+def set_com(obj: Any, name: str, value: Any) -> None:
+    """
+    Set a COM property that ``com()`` can only read.
+
+    A property put is a plain attribute assignment in dynamic dispatch: calling
+    ``obj.Member(value)`` would dispatch ``DISPATCH_PROPERTYGET`` with an
+    argument instead, which SolidWorks silently ignores for members such as
+    ``ISketchSegment.ConstructionGeometry``.
+    """
+    setattr(obj, name, value)

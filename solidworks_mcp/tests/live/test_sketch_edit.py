@@ -11,9 +11,9 @@ import unittest
 
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_edit import (
-    extend_entities, offset_entities, sketch_chamfer, sketch_fillet,
-    sketch_mirror, sketch_pattern_circular, sketch_pattern_linear,
-    split_entities, trim_entities,
+    extend_entities, offset_entities, scale_entities, sketch_chamfer,
+    sketch_fillet, sketch_mirror, sketch_pattern_circular,
+    sketch_pattern_linear, split_entities, toggle_construction, trim_entities,
 )
 
 
@@ -76,6 +76,10 @@ class LiveSketchEditTests(ScratchPartTestCase):
             ("circular pattern full turn", self._circular_full),
             ("circular pattern partial, counter clockwise", self._circular_partial),
             ("circular pattern on the top plane", self._circular_top_plane),
+            ("split a closed circle at two points", self._split_closed),
+            ("scale the selected entities", self._scale),
+            ("mark construction geometry", self._construction_on),
+            ("return one entity to normal geometry", self._construction_off),
         ]
 
     # -- fillet and chamfer ------------------------------------------------
@@ -243,6 +247,57 @@ class LiveSketchEditTests(ScratchPartTestCase):
             expected.append((round(ox + 20.0 * math.cos(angle), 3),
                              round(oy + 20.0 * math.sin(angle), 3)))
         self.assertEqual(sorted(expected), sorted(self.centres_mm(sketch)))
+
+    # -- closed split, scale and construction ------------------------------
+    def _split_closed(self):
+        ox, oy = zone(0, 4)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_circle(ox, oy, 10, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+        self.assertEqual((0, 1), self.counts(sketch))
+
+        self._result(split_entities(self.automation, sketch, ["Arc1"],
+                                    x=ox + 10, y=oy, x2=ox, y2=oy + 10,
+                                    unit="mm"))
+        self.assertEqual((0, 2), self.counts(sketch))
+
+    def _scale(self):
+        ox, oy = zone(1, 4)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_line(ox - 20, oy, ox + 20, oy, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+        self.assertEqual([40.0], self.segment_lengths_mm(sketch))
+
+        self._result(scale_entities(self.automation, sketch, ["Line1"], 2.0))
+        self.assertEqual([80.0], self.segment_lengths_mm(sketch))
+
+    def _construction_on(self):
+        ox, oy = zone(2, 4)
+        sketch = self.new_sketch()
+        first = self.automation.draw_line(ox - 20, oy - 10, ox + 20, oy - 10, "mm")
+        self.assertTrue(first["success"], first["message"])
+        second = self.automation.draw_line(ox, oy - 20, ox, oy + 20, "mm")
+        self.assertTrue(second["success"], second["message"])
+        self.exit_sketch()
+        self.assertEqual(0, self.construction_count(sketch))
+
+        self._result(toggle_construction(self.automation, sketch,
+                                         ["Line1", "Line2"], construction=True))
+        self.assertEqual(2, self.construction_count(sketch))
+
+    def _construction_off(self):
+        ox, oy = zone(3, 4)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_line(ox - 20, oy, ox + 20, oy, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+
+        self._result(toggle_construction(self.automation, sketch, ["Line1"]))
+        self.assertEqual(1, self.construction_count(sketch))
+        self._result(toggle_construction(self.automation, sketch, ["Line1"]))
+        self.assertEqual(0, self.construction_count(sketch))
 
     def _circular_top_plane(self):
         """A top-plane sketch is deliberately placed clear of the front grid."""

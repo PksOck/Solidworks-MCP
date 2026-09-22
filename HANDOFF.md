@@ -48,13 +48,16 @@ ordered backlog:
 | M3 | Surface modeling | not started |
 | M4 | Sheet metal, weldments, assembly, drawings, simulation | mixed |
 
-## Latest completed slice: sketch editing (M1.2 slice 1)
+## Latest completed slices: sketch editing (M1.2)
 
 Implementation in `solidworks_mcp/tools/sketch_edit.py` (shared with trim and
 extend):
 
-`sketch_fillet`, `sketch_chamfer`, `offset_entities`, `sketch_mirror`,
-`split_entities`, `sketch_pattern_linear`, `sketch_pattern_circular`.
+- slice 1: `sketch_fillet`, `sketch_chamfer`, `offset_entities`,
+  `sketch_mirror`, `split_entities`, `sketch_pattern_linear`,
+  `sketch_pattern_circular`
+- slice 2: `scale_entities`, `toggle_construction`, closed-entity splitting
+  through `split_entities(x, y, x2, y2)`
 
 Contract:
 
@@ -63,6 +66,9 @@ Contract:
   sketch and reports success **only when the sketch geometry changed**
   (`_edit_and_verify(..., require_change=True)`); the API return value is not
   trusted
+- `_edit_and_verify` takes an `observe` hook for edits that do not change
+  segment lengths: `toggle_construction` compares the
+  `ConstructionGeometry` flags instead
 - non-length COM arguments (chamfer type, `CapEnds` int, angles) bypass unit
   conversion; lengths go through `sw._units.to_meters`
 - `sketch_mirror` selects the mirror axis last and rejects an axis that is one
@@ -72,6 +78,9 @@ Contract:
   back; see `docs/api-findings.md` section 23.4 for the verified formula
 - `sketch_pattern_linear` defaults `angle_y_deg` to 90 so `count_y` produces a
   real grid; with both angles 0 every instance lands on one line
+- `toggle_construction` writes `ISketchSegment.ConstructionGeometry` through
+  `comutil.set_com`, because calling the member with an argument dispatches a
+  property **get** and silently does nothing
 
 Verification:
 
@@ -82,7 +91,7 @@ $env:SW_MCP_KEEP_REVIEW='1'
 .venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_edit solidworks_mcp.tests.live.test_sketch_entities -v
 ```
 
-Result: 58 unit tests green; the two live modules run two tests in about 150 s
+Result: 47 unit tests green; the two live modules run two tests in about 170 s
 and leave every scratch part unsaved.
 
 ## Live test strategy (changed 2026-09-22)
@@ -103,8 +112,8 @@ part, via `solidworks_mcp/tests/live/_scratch.py`
 - trim and extend moved here out of `tests/live/test_documents.py`
 
 Current shape: `test_sketch_entities.py` = 21 entity steps + a plate profile
-+ the extrusion (23 screenshots); `test_sketch_edit.py` = 17 edit and pattern
-steps (17 screenshots).
++ the extrusion (23 screenshots); `test_sketch_edit.py` = 21 edit and pattern
+steps (21 screenshots).
 
 When a step ends in a feature, prove success by **volume**, not by body count:
 a single sketch with several closed loops extrudes all of them, but a body count
@@ -133,9 +142,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 87 requirements —
-72 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(47 verified live).
+Status after this slice: 90 requirements —
+75 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(50 verified live).
 
 ## Remaining absent capabilities
 
@@ -146,17 +155,19 @@ Status after this slice: 87 requirements —
 | 6.3 | Bounded traversal / performance | internal | R7 |
 | M1.1-k | Perimeter (3-point) circle | — | SW 2025 exposes neither `CreatePerimeterCircle` nor `Create3PointCircle` |
 
+Blocked on the SolidWorks API (see `docs/upgrade/odlocitve-in-backlog.md`
+section 2.4): sketch entity move/rotate/flip (`SketchModifyTranslate`,
+`SketchModifyRotate`, `SketchModifyFlip` all return without changing geometry)
+and repair sketch (no `Repair` member exists for sketches in SW 2025).
+
 Recommended next items, in the plan's order:
 
-1. M1.2 remainder: `convert_entities` (`SketchUseEdge3`, needs model edge/face
-   selection), `move_entities` (`SketchModifyTranslate`, `SketchModifyRotate`,
-   `SketchModifyScale`, `SketchModifyFlip` — note that all four return `None`
-   except Scale, so success must be proven from geometry, and translate/rotate
-   keep the segment lengths unchanged), `toggle_construction`,
-   `repair_sketch`
-2. `draw_equation_curve` — confirm `CreateEquationSpline`/`CreateEquationSpline2`
+1. `draw_equation_curve` — confirm `CreateEquationSpline`/`CreateEquationSpline2`
    parameter semantics live before exposing them
-3. M1.3 sketch relations and dimensions
+2. M1.3 sketch relations and dimensions (`SketchAddConstraints`,
+   `SketchConstraintsDel`, `InsertSketchText`, `AddDimension2` on a sketch)
+3. M1.4 sketching on model geometry — this is also what unblocks
+   `convert_entities` (`SketchUseEdge3` needs model edges selected)
 
 ## Known traps (do not relearn)
 
@@ -177,6 +188,14 @@ Recommended next items, in the plan's order:
   profile plus five holes gives one body either way.
 - With `angle_y_deg = 0` a linear sketch pattern folds the second row onto the
   first line instead of stacking perpendicular to it.
+- `SketchModifyTranslate`, `SketchModifyRotate` and `SketchModifyFlip` return
+  without changing the geometry in this build; only `SketchModifyScale` works
+  (about the sketch origin, no centre argument).
+- A sketch that is created and exited **without geometry is deleted again**.
+  Read the sketch name right after `create_sketch`, never after exiting it.
+- Setting a COM property needs a plain attribute assignment (`comutil.set_com`);
+  `com(obj, "Member", value)` dispatches a property *get* with an argument and
+  is silently ignored, which is how the construction flag refused to clear.
 - `IMathUtility.CreatePoint` + `IMathPoint.MultiplyTransform` is broken in this
   build (returns the translation alone).
 - Leaveover unsaved `Part*` scratch documents wedge `create_sketch`/`draw_line`.

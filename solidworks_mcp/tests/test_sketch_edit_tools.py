@@ -4,18 +4,21 @@ import unittest
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_edit import (
-    offset_entities, sketch_chamfer, sketch_fillet, sketch_mirror,
-    sketch_pattern_circular, sketch_pattern_linear, split_entities,
+    offset_entities, scale_entities, sketch_chamfer, sketch_fillet,
+    sketch_mirror, sketch_pattern_circular, sketch_pattern_linear,
+    split_entities, toggle_construction,
 )
 
 
 class Segment:
-    def __init__(self, length, type_code=0, centre=None, start=None, end=None):
+    def __init__(self, length, type_code=0, centre=None, start=None, end=None,
+                 construction=False):
         self.length = length
         self.type_code = type_code
         self.centre = centre
         self.start = start if start is not None else (0.0, 0.0, 0.0)
         self.end = end if end is not None else (0.0, 0.0, 0.0)
+        self.ConstructionGeometry = construction
 
     def GetLength(self):
         return self.length
@@ -40,7 +43,7 @@ class Sketch:
         self.document = document
 
     def GetSketchSegments(self):
-        return [Segment(length) for length in self.document.lengths]
+        return list(self.document.segments)
 
 
 class SketchManager:
@@ -52,7 +55,7 @@ class SketchManager:
     def _record(self, name, arguments):
         self.calls.append((name, arguments))
         if self.changes:
-            self.document.lengths = self.document.lengths + [9.0]
+            self.document.segments.append(Segment(9.0))
 
     def CreateFillet(self, radius, constrained_corners):
         self._record("CreateFillet", (radius, constrained_corners))
@@ -69,6 +72,10 @@ class SketchManager:
 
     def SplitOpenSegment(self, x, y, z):
         self._record("SplitOpenSegment", (x, y, z))
+        return (object(), object())
+
+    def SplitClosedSegment(self, x1, y1, z1, x2, y2, z2):
+        self._record("SplitClosedSegment", (x1, y1, z1, x2, y2, z2))
         return (object(), object())
 
     def CreateLinearSketchStepAndRepeat(self, *arguments):
@@ -131,13 +138,14 @@ class Extension:
 class Document:
     def __init__(self, select_ok=True, changes=True,
                  seed_centre=(0.02, 0.0, 0.0)):
-        self.lengths = [50.0, 40.0]
+        self.changes = changes
+        self.segments = [Segment(50.0), Segment(40.0)]
         self.sketch = Feature("Sketch1", Sketch(self))
         self.FirstFeature = self.sketch
         self.selected = []
         self.segments_by_name = {
-            "Line1": Segment(50.0),
-            "Line2": Segment(40.0),
+            "Line1": self.segments[0],
+            "Line2": self.segments[1],
             "Arc1": Segment(31.4, type_code=1, centre=seed_centre,
                             start=(seed_centre[0] + 0.005, seed_centre[1], 0.0),
                             end=(seed_centre[0] + 0.005, seed_centre[1], 0.0)),
@@ -149,6 +157,7 @@ class Document:
         self.insert_sketch_calls = []
         self.clear_calls = []
         self.mirror_calls = 0
+        self.scale_calls = []
 
     def GetType(self):
         return 1
@@ -168,8 +177,15 @@ class Document:
 
     def SketchMirror(self):
         self.mirror_calls += 1
-        self.lengths = self.lengths + [7.0]
+        self.segments.append(Segment(7.0))
         return None
+
+    def SketchModifyScale(self, factor):
+        self.scale_calls.append(factor)
+        if self.changes:
+            for segment in self.segments:
+                segment.length *= factor
+        return True
 
 
 class Units:
@@ -211,7 +227,7 @@ class RegistrationTests(unittest.TestCase):
         for name in (
             "sketch_fillet", "sketch_chamfer", "offset_entities",
             "sketch_mirror", "split_entities", "sketch_pattern_linear",
-            "sketch_pattern_circular",
+            "sketch_pattern_circular", "scale_entities", "toggle_construction",
         ):
             with self.subTest(tool=name):
                 self.assertIn(name, tools)
@@ -616,6 +632,127 @@ class CircularPatternTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(0, automation.document.edit_calls)
+
+
+class SplitClosedTests(unittest.TestCase):
+    def test_two_points_split_a_closed_entity_in_metres(self):
+        automation = Automation()
+
+        result = split_entities(automation, "Sketch1", ["Arc1"], x=10, y=0,
+                                x2=0, y2=10)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(
+            [(0.01, 0.0, 0.0, 0.0, 0.01, 0.0)],
+            manager_calls(automation, "SplitClosedSegment"),
+        )
+        self.assertTrue(result["data"]["closed"])
+        self.assertEqual([10, 0, 0, 10], result["data"]["pick"])
+
+    def test_one_closed_point_is_rejected_before_com(self):
+        for extra in ({"x2": 0}, {"y2": 10}):
+            with self.subTest(extra=extra):
+                automation = Automation()
+                result = split_entities(automation, "Sketch1", ["Arc1"], x=10,
+                                        y=0, **extra)
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+
+    def test_an_open_split_still_calls_the_open_segment_api(self):
+        automation = Automation()
+
+        result = split_entities(automation, "Sketch1", ["Line1"], x=25, y=0)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertFalse(result["data"]["closed"])
+        self.assertEqual(1, len(manager_calls(automation, "SplitOpenSegment")))
+        self.assertEqual([], manager_calls(automation, "SplitClosedSegment"))
+
+
+class ScaleTests(unittest.TestCase):
+    def test_scale_passes_the_factor_and_scales_the_selected_entities(self):
+        automation = Automation()
+
+        result = scale_entities(automation, "Sketch1", ["Line1", "Line2"], 2.0)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([2.0], automation.document.scale_calls)
+        self.assertEqual([100.0, 80.0],
+                         [segment.GetLength()
+                          for segment in automation.document.segments])
+        self.assertEqual(
+            [("Line1", "SKETCHSEGMENT", False), ("Line2", "SKETCHSEGMENT", True)],
+            automation.document.Extension.select_calls,
+        )
+
+    def test_a_factor_of_one_is_rejected_before_com(self):
+        for factor in (1, 0, -2, "2", None):
+            with self.subTest(factor=factor):
+                automation = Automation()
+                result = scale_entities(automation, "Sketch1", ["Line1"], factor)
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+
+    def test_unchanged_geometry_is_reported_as_a_failure(self):
+        automation = Automation()
+        automation.document.changes = False
+        automation.document.SketchManager.changes = False
+
+        result = scale_entities(automation, "Sketch1", ["Line1"], 2.0)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SCALE_FAILED", result["data"]["code"])
+
+
+class ToggleConstructionTests(unittest.TestCase):
+    def test_forcing_true_marks_the_entities_as_construction(self):
+        automation = Automation()
+
+        result = toggle_construction(automation, "Sketch1", ["Line1"],
+                                     construction=True)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertIs(True,
+                      automation.document.segments_by_name["Line1"]
+                      .ConstructionGeometry)
+        self.assertIs(True, result["data"]["construction"])
+
+    def test_a_second_forced_true_reports_no_change(self):
+        automation = Automation()
+        toggle_construction(automation, "Sketch1", ["Line1"], construction=True)
+
+        result = toggle_construction(automation, "Sketch1", ["Line1"],
+                                     construction=True)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CONSTRUCTION_FAILED", result["data"]["code"])
+
+    def test_omitting_the_state_flips_each_entity(self):
+        automation = Automation()
+
+        first = toggle_construction(automation, "Sketch1", ["Line1", "Line2"])
+        self.assertTrue(first["success"], first["message"])
+        flags = [automation.document.segments_by_name[name].ConstructionGeometry
+                 for name in ("Line1", "Line2")]
+        self.assertEqual([True, True], flags)
+
+        second = toggle_construction(automation, "Sketch1", ["Line1"])
+        self.assertTrue(second["success"], second["message"])
+        self.assertIs(False,
+                      automation.document.segments_by_name["Line1"]
+                      .ConstructionGeometry)
+        self.assertIs(True,
+                      automation.document.segments_by_name["Line2"]
+                      .ConstructionGeometry)
+
+    def test_a_non_boolean_state_is_rejected_before_com(self):
+        automation = Automation()
+
+        result = toggle_construction(automation, "Sketch1", ["Line1"],
+                                     construction="yes")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(0, automation.active_doc_calls)
 
 
 if __name__ == "__main__":
