@@ -11,8 +11,8 @@ import unittest
 
 from solidworks_mcp.tests.live._scratch import ScratchPartTestCase, live_only, zone
 from solidworks_mcp.tools.sketch_edit import (
-    extend_entities, offset_entities, scale_entities, sketch_chamfer,
-    sketch_fillet, sketch_mirror, sketch_pattern_circular,
+    extend_entities, offset_entities, rotate_entities, scale_entities,
+    sketch_chamfer, sketch_fillet, sketch_mirror, sketch_pattern_circular,
     sketch_pattern_linear, split_entities, toggle_construction, trim_entities,
 )
 
@@ -80,6 +80,8 @@ class LiveSketchEditTests(ScratchPartTestCase):
             ("scale the selected entities", self._scale),
             ("mark construction geometry", self._construction_on),
             ("return one entity to normal geometry", self._construction_off),
+            ("rotate the selected entities", self._rotate),
+            ("rotate a profile and extrude it", self._rotate_and_extrude),
         ]
 
     # -- fillet and chamfer ------------------------------------------------
@@ -298,6 +300,47 @@ class LiveSketchEditTests(ScratchPartTestCase):
         self.assertEqual(1, self.construction_count(sketch))
         self._result(toggle_construction(self.automation, sketch, ["Line1"]))
         self.assertEqual(0, self.construction_count(sketch))
+
+    # -- rotation ----------------------------------------------------------
+    def _rotate(self):
+        """The frame changes; the segment lengths deliberately do not."""
+        ox, oy = zone(0, 5)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_line(ox, oy, ox + 30, oy, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        circle = self.automation.draw_circle(ox + 30, oy, 10, "mm")
+        self.assertTrue(circle["success"], circle["message"])
+        self.exit_sketch()
+        before_frame = self.sketch_transform(sketch)
+        before_lengths = self.segment_lengths_mm(sketch)
+
+        self._result(rotate_entities(self.automation, sketch, ["Line1", "Arc1"],
+                                     angle_deg=90, center_x=ox, center_y=oy,
+                                     unit="mm"))
+
+        self.assertNotEqual(before_frame, self.sketch_transform(sketch))
+        self.assertEqual(before_lengths, self.segment_lengths_mm(sketch))
+
+    def _rotate_and_extrude(self):
+        """A measurable proof: the 40x20 profile swaps its axes in the body box."""
+        ox, oy = zone(1, 5)
+        sketch = self.new_sketch()
+        drawn = self.automation.draw_rectangle(
+            ox + 10, oy - 30, ox + 50, oy - 10, "mm")
+        self.assertTrue(drawn["success"], drawn["message"])
+        self.exit_sketch()
+
+        self._result(rotate_entities(
+            self.automation, sketch,
+            ["Line1", "Line2", "Line3", "Line4"],
+            angle_deg=90, center_x=ox, center_y=oy, unit="mm"))
+
+        extrusion = self.automation.extrude_sketch(5, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        box = self.body_box_mm()[0]
+        # The 40 mm edge now runs along the axis the 20 mm edge used to hold.
+        self.assertAlmostEqual(20.0, box[4] - box[1], places=3)
+        self.assertAlmostEqual(40.0, box[5] - box[2], places=3)
 
     def _circular_top_plane(self):
         """A top-plane sketch is deliberately placed clear of the front grid."""

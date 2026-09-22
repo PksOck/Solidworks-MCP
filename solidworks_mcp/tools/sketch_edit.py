@@ -1,11 +1,11 @@
 """Sketch editing operations on existing sketch entities.
 
 Covers trim and extend, sketch fillet and chamfer, offset, mirror, split,
-construction geometry, scaling and the linear and circular sketch patterns.
-Every tool reopens the named sketch for edit, applies one
+construction geometry, scaling, rotation and the linear and circular sketch
+patterns. Every tool reopens the named sketch for edit, applies one
 ``ISketchManager``/``IModelDoc2`` operation to the selected entities, closes the
-sketch again and confirms success by an observed geometry change rather than by
-the API return value.
+sketch again and confirms success by an observed change rather than by the API
+return value.
 """
 
 import math
@@ -145,6 +145,29 @@ def _segment_lengths(document, feature):
     for segment in com(sketch, "GetSketchSegments") or []:
         lengths.append(round(float(com(segment, "GetLength")), 9))
     return lengths
+
+
+def _sketch_transform(document, feature):
+    """Snapshot the sketch coordinate system.
+
+    ``SketchModifyRotate`` rotates the sketch frame instead of rewriting the
+    segment coordinates, so the change shows up here and *not* in the segment
+    lengths.  Verified live: the geometry visibly and durably rotates while
+    ``GetSketchSegments`` keeps returning the pre-edit coordinates.
+    """
+    sketch = com(feature, "GetSpecificFeature2")
+    if sketch is None:
+        return None
+    transform = com(sketch, "ModelToSketchTransform")
+    if transform is None:
+        return None
+    return tuple(round(float(value), 9) for value in com(transform, "ArrayData"))
+
+
+def _sketch_state(document, feature):
+    """Segment lengths plus the sketch frame; a change in either one counts."""
+    return (_segment_lengths(document, feature),
+            _sketch_transform(document, feature))
 
 
 def _sketch_segment_construction(document, feature):
@@ -861,6 +884,84 @@ def split_entities(sw, sketch, entities, x, y, unit="mm", x2=None, y2=None):
             "entities": names,
             "pick": pick,
             "closed": closed,
+            "unit": unit,
+            "geometry_changed": changed,
+            "references_invalidated": True,
+        },
+    )
+
+
+@tool(
+    name="rotate_entities",
+    description=(
+        "Rotate the named sketch entities about a point in the sketch plane. "
+        "SolidWorks applies this to the sketch frame, so the sketch coordinate "
+        "system rotates with the geometry. Positive angles turn "
+        "counter-clockwise; the centre is given in sketch coordinates."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "angle_deg": {"type": "number"},
+        "center_x": {"type": "number", "default": 0},
+        "center_y": {"type": "number", "default": 0},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["sketch", "entities", "angle_deg"]},
+    operation_class=OperationClass.MUTATE,
+)
+def rotate_entities(sw, sketch, entities, angle_deg, center_x=0, center_y=0,
+                    unit="mm"):
+    if not isinstance(sketch, str) or not sketch.strip():
+        return _invalid(sw, "sketch must be a non-empty sketch name.")
+
+    names = _clean_names(entities)
+    if names is None:
+        return _invalid(sw, "entities must be one or more distinct non-empty "
+                            "entity names.")
+
+    if not _is_number(angle_deg):
+        return _invalid(sw, "angle_deg must be a finite number.")
+    if angle_deg % 360 == 0:
+        return _invalid(sw, "angle_deg must not be a full turn; that changes "
+                            "nothing.")
+
+    center_x_m, error = _convert_length(sw, center_x, unit, "center_x")
+    if error:
+        return error
+    center_y_m, error = _convert_length(sw, center_y, unit, "center_y")
+    if error:
+        return error
+
+    document, error = _require_part(sw)
+    if error:
+        return error
+    feature, error = _sketch_feature(sw, document, sketch)
+    if error:
+        return error
+
+    changed = _edit_and_verify(
+        sw, document, feature, names,
+        action="rotate",
+        call=lambda _context: com(document, "SketchModifyRotate",
+                                  center_x_m, center_y_m,
+                                  math.radians(angle_deg)),
+        failure_code="ROTATE_FAILED",
+        failure_label="Sketch rotate",
+        require_change=True,
+        observe=_sketch_state,
+    )
+    if isinstance(changed, dict):
+        return changed
+
+    return sw._result(
+        True,
+        f"Rotated {', '.join(names)} in {sketch} by {angle_deg} degrees about "
+        f"({center_x}, {center_y}){unit}.",
+        data={
+            "sketch": sketch,
+            "entities": names,
+            "angle_deg": angle_deg,
+            "center": [center_x, center_y],
             "unit": unit,
             "geometry_changed": changed,
             "references_invalidated": True,

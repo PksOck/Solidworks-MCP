@@ -41,7 +41,7 @@ ordered backlog:
 | Milestone | Content | Status |
 |---|---|---|
 | M1.1 | Sketch entities | 21 of 22 tools done and live-verified in one sequence (`draw_equation_curve` missing) |
-| M1.2 | Sketch editing | slice 1 done: fillet, chamfer, offset, mirror, split, linear and circular patterns |
+| M1.2 | Sketch editing | slices 1–3 done: fillet, chamfer, offset, mirror, split, linear and circular patterns, scale, construction toggle, rotate |
 | M1.3 | Sketch relations and dimensions | not started |
 | M1.4 | Sketch on reference plane / 3D sketch | not started |
 | M2 | Part features, bodies, reference geometry, attributes | in progress from older work |
@@ -58,6 +58,7 @@ extend):
   `sketch_pattern_circular`
 - slice 2: `scale_entities`, `toggle_construction`, closed-entity splitting
   through `split_entities(x, y, x2, y2)`
+- slice 3: `rotate_entities` (see below)
 
 Contract:
 
@@ -68,7 +69,16 @@ Contract:
   trusted
 - `_edit_and_verify` takes an `observe` hook for edits that do not change
   segment lengths: `toggle_construction` compares the
-  `ConstructionGeometry` flags instead
+  `ConstructionGeometry` flags, `rotate_entities` compares
+  `_sketch_state` = (segment lengths, `ISketch.ModelToSketchTransform.ArrayData`)
+- **`SketchModifyRotate` rotates the sketch coordinate system, not the segment
+  coordinates.** The segment getters keep returning the old coordinates even
+  after a rebuild or after the sketch is closed and reopened, so a
+  length-only observer reports a false failure. `rotate_entities` therefore
+  treats a change in *either* half of `_sketch_state` as success. The edit is
+  real and durable: front-view screenshots show the rotation, and extruding the
+  rotated profile gives a body box with the axes swapped. See
+  `docs/api-findings.md` section 25
 - non-length COM arguments (chamfer type, `CapEnds` int, angles) bypass unit
   conversion; lengths go through `sw._units.to_meters`
 - `sketch_mirror` selects the mirror axis last and rejects an axis that is one
@@ -91,8 +101,8 @@ $env:SW_MCP_KEEP_REVIEW='1'
 .venv\Scripts\python.exe -m unittest solidworks_mcp.tests.live.test_sketch_edit solidworks_mcp.tests.live.test_sketch_entities -v
 ```
 
-Result: 47 unit tests green; the two live modules run two tests in about 170 s
-and leave every scratch part unsaved.
+Result: 51 unit tests in the edit module (323 in the full sweep); the live edit
+sequence runs in about 107 s and leaves every scratch part unsaved.
 
 ## Live test strategy (changed 2026-09-22)
 
@@ -112,8 +122,10 @@ part, via `solidworks_mcp/tests/live/_scratch.py`
 - trim and extend moved here out of `tests/live/test_documents.py`
 
 Current shape: `test_sketch_entities.py` = 21 entity steps + a plate profile
-+ the extrusion (23 screenshots); `test_sketch_edit.py` = 21 edit and pattern
-steps (21 screenshots).
++ the extrusion (23 screenshots); `test_sketch_edit.py` = 23 edit and pattern
+steps (23 screenshots). The step that rotates a profile and extrudes it is the
+rigorous one: it asserts the 40x20 profile **swaps its axes** in `GetBodyBox`,
+which no length-based check can see.
 
 When a step ends in a feature, prove success by **volume**, not by body count:
 a single sketch with several closed loops extrudes all of them, but a body count
@@ -142,9 +154,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after this slice: 90 requirements —
-75 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(50 verified live).
+Status after this slice: 91 requirements —
+76 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(51 verified live).
 
 ## Remaining absent capabilities
 
@@ -156,9 +168,20 @@ Status after this slice: 90 requirements —
 | M1.1-k | Perimeter (3-point) circle | — | SW 2025 exposes neither `CreatePerimeterCircle` nor `Create3PointCircle` |
 
 Blocked on the SolidWorks API (see `docs/upgrade/odlocitve-in-backlog.md`
-section 2.4): sketch entity move/rotate/flip (`SketchModifyTranslate`,
-`SketchModifyRotate`, `SketchModifyFlip` all return without changing geometry)
-and repair sketch (no `Repair` member exists for sketches in SW 2025).
+section 2.4):
+
+- `SketchModifyTranslate` (move entities) — five argument shapes tried with and
+  without the sketch origin in the selection, both sketch-closing modes and an
+  explicit rebuild: the geometry and the sketch frame stay unchanged. The UI
+  command works, this member does not (B21).
+- `SketchModifyFlip` — changes only the sketch normal; the model geometry is
+  identical (measured with `GetBodyBox` for flags 1–3), so it is not exposed.
+- `repair_sketch` (no `Repair` member exists for sketches in SW 2025, B22).
+
+`SketchModifyRotate` **does** work and is now exposed as `rotate_entities`;
+`SketchModifyScale` works as `scale_entities`. Both change the sketch frame
+rather than the segment coordinates — verify with `ISketch.ModelToSketchTransform`,
+never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
@@ -176,7 +199,7 @@ Recommended next items, in the plan's order:
   prove success by observed geometry change.
 - `SketchMirror()`, `SketchModifyTranslate`, `SketchModifyRotate` and
   `SketchModifyFlip` all return `None` on success; `SketchModifyScale` returns
-  `True`.
+  `True`. Never judge these calls by their return value.
 - A circular sketch pattern's centre is derived by SolidWorks as
   `seed + ArcRadius * (cos ArcAngle, sin ArcAngle)`; `PatternSpacing` is an
   angle in radians, and a positive spacing steps clockwise. Do not guess it —
@@ -188,9 +211,15 @@ Recommended next items, in the plan's order:
   profile plus five holes gives one body either way.
 - With `angle_y_deg = 0` a linear sketch pattern folds the second row onto the
   first line instead of stacking perpendicular to it.
-- `SketchModifyTranslate`, `SketchModifyRotate` and `SketchModifyFlip` return
-  without changing the geometry in this build; only `SketchModifyScale` works
-  (about the sketch origin, no centre argument).
+- `SketchModifyRotate` and `SketchModifyScale` work but change the **sketch
+  coordinate system**, not the segment coordinates: after the call every
+  segment getter still reports the old values, through a rebuild and a
+  close/reopen. Verify with `ISketch.ModelToSketchTransform.ArrayData` (and, for
+  a durable proof, `GetBodyBox` after extruding the rotated profile).
+  `SketchModifyTranslate` does nothing at all; `SketchModifyFlip` only flips the
+  sketch normal. A "no change" read from segment coordinates is therefore not
+  evidence that these calls failed — look at the screen too (this exact trap
+  cost a long detour; the user spotted the rotation on screen).
 - A sketch that is created and exited **without geometry is deleted again**.
   Read the sketch name right after `create_sketch`, never after exiting it.
 - Setting a COM property needs a plain attribute assignment (`comutil.set_com`);

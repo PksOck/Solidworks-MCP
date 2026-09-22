@@ -4,9 +4,9 @@ import unittest
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_edit import (
-    offset_entities, scale_entities, sketch_chamfer, sketch_fillet,
-    sketch_mirror, sketch_pattern_circular, sketch_pattern_linear,
-    split_entities, toggle_construction,
+    offset_entities, rotate_entities, scale_entities, sketch_chamfer,
+    sketch_fillet, sketch_mirror, sketch_pattern_circular,
+    sketch_pattern_linear, split_entities, toggle_construction,
 )
 
 
@@ -44,6 +44,21 @@ class Sketch:
 
     def GetSketchSegments(self):
         return list(self.document.segments)
+
+    @property
+    def ModelToSketchTransform(self):
+        return self.document.transform_object
+
+
+class Transform:
+    """Stands in for IMathTransform on the fake sketch."""
+
+    def __init__(self, document):
+        self.document = document
+
+    @property
+    def ArrayData(self):
+        return tuple(self.document.transform)
 
 
 class SketchManager:
@@ -140,6 +155,9 @@ class Document:
                  seed_centre=(0.02, 0.0, 0.0)):
         self.changes = changes
         self.segments = [Segment(50.0), Segment(40.0)]
+        self.transform = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                          0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        self.transform_object = Transform(self)
         self.sketch = Feature("Sketch1", Sketch(self))
         self.FirstFeature = self.sketch
         self.selected = []
@@ -158,6 +176,7 @@ class Document:
         self.clear_calls = []
         self.mirror_calls = 0
         self.scale_calls = []
+        self.rotate_calls = []
 
     def GetType(self):
         return 1
@@ -186,6 +205,14 @@ class Document:
             for segment in self.segments:
                 segment.length *= factor
         return True
+
+    def SketchModifyRotate(self, center_x, center_y, angle):
+        self.rotate_calls.append((center_x, center_y, angle))
+        if self.changes:
+            # Live behaviour: only the sketch frame changes here, the segment
+            # coordinates (and their lengths) stay as they were.
+            self.transform[3:9] = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0]
+        return None
 
 
 class Units:
@@ -228,6 +255,7 @@ class RegistrationTests(unittest.TestCase):
             "sketch_fillet", "sketch_chamfer", "offset_entities",
             "sketch_mirror", "split_entities", "sketch_pattern_linear",
             "sketch_pattern_circular", "scale_entities", "toggle_construction",
+            "rotate_entities",
         ):
             with self.subTest(tool=name):
                 self.assertIn(name, tools)
@@ -753,6 +781,51 @@ class ToggleConstructionTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(0, automation.active_doc_calls)
+
+
+class RotateTests(unittest.TestCase):
+    def test_rotate_passes_the_centre_in_metres_and_the_angle_in_radians(self):
+        automation = Automation()
+
+        result = rotate_entities(automation, "Sketch1", ["Line1", "Line2"],
+                                 angle_deg=90, center_x=10, center_y=-5,
+                                 unit="mm")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([(0.01, -0.005, math.pi / 2)],
+                         automation.document.rotate_calls)
+        self.assertEqual(90, result["data"]["angle_deg"])
+
+    def test_rotate_succeeds_even_though_the_segment_lengths_do_not_change(self):
+        """The live call rotates the sketch frame, not the segment coordinates."""
+        automation = Automation()
+        before = [segment.GetLength()
+                  for segment in automation.document.segments]
+
+        result = rotate_entities(automation, "Sketch1", ["Line1"], angle_deg=45)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(before, [segment.GetLength()
+                                  for segment in automation.document.segments])
+        self.assertTrue(result["data"]["geometry_changed"])
+
+    def test_a_full_turn_and_bad_angles_are_rejected_before_com(self):
+        for angle in (0, 360, -360, "90", None):
+            with self.subTest(angle=angle):
+                automation = Automation()
+                result = rotate_entities(automation, "Sketch1", ["Line1"],
+                                         angle_deg=angle)
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+
+    def test_an_unchanged_frame_is_reported_as_a_failure(self):
+        automation = Automation()
+        automation.document.changes = False
+
+        result = rotate_entities(automation, "Sketch1", ["Line1"], angle_deg=90)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("ROTATE_FAILED", result["data"]["code"])
 
 
 if __name__ == "__main__":

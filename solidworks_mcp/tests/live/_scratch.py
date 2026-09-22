@@ -149,6 +149,15 @@ class ScratchPartTestCase(unittest.TestCase):
     def solid_body_count(self):
         return len(com(self.document(), "GetBodies2", 0, True) or [])
 
+    def body_box_mm(self):
+        """Bounding box of every solid body as [x0, y0, z0, x1, y1, z1] in mm."""
+        boxes = []
+        for body in com(self.document(), "GetBodies2", 0, True) or []:
+            self._keep(body)
+            box = com(body, "GetBodyBox")
+            boxes.append([round(float(value) * 1000, 3) for value in box])
+        return boxes
+
     def feature_count(self, type_name):
         return sum(1 for feature in self.features()
                    if com(feature, "GetTypeName2") == type_name)
@@ -246,3 +255,10 @@ class ScratchPartTestCase(unittest.TestCase):
             self._keep(segment)
             lengths.append(round(float(com(segment, "GetLength")) * 1000, 3))
         return sorted(lengths, reverse=descending)
+
+    def sketch_transform(self, name):
+        """The sketch frame; rotate/flip edits change this and not the segments."""
+        transform = com(self.sketch(name), "ModelToSketchTransform")
+        self._keep(transform)
+        return tuple(round(float(value), 9)
+                     for value in com(transform, "ArrayData"))
