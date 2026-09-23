@@ -833,6 +833,39 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("SELECTION_EMPTY", result["data"]["code"])
 
+    def test_polygon_radius_is_the_circumscribed_vertex_radius_without_saving(self):
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Top", exact_geometry=True)["success"])
+        polygon = self.automation.draw_polygon(0, 0, 25, 6, "mm")
+        self.assertTrue(polygon["success"], polygon["message"])
+        extrusion = self.automation.extrude_sketch(10, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+
+        hexagon_area = 3 * math.sqrt(3) / 2 * 25 ** 2
+        self.assertAlmostEqual(hexagon_area * 10, self._total_volume_mm3(), places=2)
+
+    def test_arc_runs_counter_clockwise_from_start_to_end_angle(self):
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        arc = self.automation.draw_arc_center(0, 0, 20, 90, 0, "mm")
+        self.assertTrue(arc["success"], arc["message"])
+        self.assertEqual(270, arc["data"]["arc_angle"])
+
+        document, _ = self.automation.get_active_doc()
+        sketch = com(com(document, "SketchManager"), "ActiveSketch")
+        (segment,) = com(sketch, "GetSketchSegments")
+        self.assertAlmostEqual(1.5 * math.pi * 20, com(segment, "GetLength") * 1000, places=3)
+
+    def test_create_sketch_refuses_a_reference_plane_name(self):
+        self._new_part()
+        reference_plane = create_reference_plane(self.automation, "Top Plane", 30, "mm")
+        self.assertTrue(reference_plane["success"], reference_plane["message"])
+
+        result = self.automation.create_sketch("Plane1")
+
+        self.assertFalse(result["success"])
+        self.assertIn("create_sketch_on_plane", result["message"])
+
     def test_draft_tilts_the_four_sides_outward_without_saving(self):
         _, after = self._draft_box_sides(flip=False)
 

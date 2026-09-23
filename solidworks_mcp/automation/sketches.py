@@ -43,7 +43,13 @@ class SketchOperations:
             if err:
                 return err
             
-            # Get plane name
+            # Only the three standard planes; SwPlanes.get would silently
+            # map any other name to Front Plane.
+            if str(plane).lower() not in ("front", "top", "right"):
+                return self._result(False,
+                    f"Unknown plane '{plane}'. Use Front, Top or Right, or "
+                    "create_sketch_on_plane for a named plane.",
+                    SwErrors.swInvalidInput)
             plane_name = SwPlanes.get(plane)
             
             # Create empty variant for callout parameter
@@ -325,12 +331,14 @@ class SketchOperations:
                                   SwErrors.swSketchError)
             
             unit_str = unit or self._units.default_unit.value
-            arc_angle = abs(end_angle - start_angle)
+            # CreateArc direction 1 runs counter-clockwise from start to end.
+            arc_angle = (end_angle - start_angle) % 360
             
             return self._result(True, f"Arc: r={radius}{unit_str}, {arc_angle}°",
                               SwErrors.swSuccess,
                               {"radius": radius, "start_angle": start_angle,
-                               "end_angle": end_angle, "unit": unit_str})
+                               "end_angle": end_angle, "arc_angle": arc_angle,
+                               "unit": unit_str})
             
         except Exception as e:
             logger.error(f"Draw arc error: {e}\n{traceback.format_exc()}")

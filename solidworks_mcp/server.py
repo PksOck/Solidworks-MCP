@@ -276,7 +276,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="draw_arc",
-            description="Draw an arc by center and angles.",
+            description="Draw an arc by center and angles, counter-clockwise from start_angle to end_angle.",
             inputSchema={
                 "type": "object",
                 "properties": {
