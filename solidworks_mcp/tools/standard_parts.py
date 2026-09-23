@@ -16,9 +16,11 @@ fill itself stays a CLI script; the LLM-facing `standard_library_status` tool
 reports state and the exact command to run.
 """
 
+import hashlib
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from ..comutil import com
@@ -108,6 +110,95 @@ def _source_copy(lib: Path, row: dict) -> Path:
     if row.get("source") == "custom" and "/" in rel:
         rel = rel.split("/", 1)[1]
     return lib / "source" / row["standard"] / rel
+
+
+def _master_file(lib: Path, row: dict) -> str:
+    """Master file for a row: the portable source copy when present, else the
+    original Toolbox path recorded at sync time."""
+    copy = _source_copy(lib, row)
+    if copy.is_file():
+        return str(copy)
+    return row.get("path") or ""
+
+
+def _sized_cache_path(lib: Path, row: dict, size: str) -> Path:
+    """Prepared-copy path for one (part, size) under lib/sized/ (gitignored)."""
+    rel = row["rel"]
+    if row.get("source") == "custom" and "/" in rel:
+        rel = rel.split("/", 1)[1]
+    safe_size = "".join(c if c not in '<>:"/\\|?*' else "_" for c in size)
+    digest = hashlib.md5(f"{row['rel']}|{size}".encode("utf-8", "surrogatepass")).hexdigest()[:10]
+    stem = Path(rel).stem
+    return lib / "sized" / row["standard"] / f"{stem}__{digest}__{safe_size}.sldprt"
+
+
+def _prepare_sized_copy(sw, lib: Path, row: dict, size: str):
+    """JIT: turn one Toolbox size into a real part file.
+
+    Verified live (2026-09-23): AddComponent5 with a configuration *name* on a
+    Toolbox part silently inserts the part's active configuration instead of
+    the requested one. The working recipe is to prep a writable copy whose
+    active configuration is the requested size -- ShowConfiguration2, rebuild,
+    save -- then insert that copy. Returns the prepared path, or None.
+    """
+    target = _sized_cache_path(lib, row, size)
+    if os.path.isfile(target):
+        return str(target)
+    master = _master_file(lib, row)
+    if not master or not os.path.isfile(master):
+        logger.warning("sized prep: master missing for %s", row["rel"])
+        return None
+
+    app = getattr(sw, "app", None)
+    if app is None:
+        logger.warning("sized prep: no app connection")
+        return None
+    if hasattr(app, "_oleobj_"):
+        import win32com.client
+        app = win32com.client.dynamic.Dispatch(app)
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(master, target)
+        os.chmod(target, 0o666)
+    except OSError as error:
+        logger.warning("sized prep: copy failed: %s", error)
+        return None
+
+    import pythoncom
+    import win32com.client as wc
+    doc = None
+    try:
+        errors = wc.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+        warnings = wc.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+        # swOpenDocOptions_Silent (1) + writable
+        doc = com(app, "OpenDoc6", str(target), 1, 1, "", errors, warnings)
+        if doc is None:
+            logger.warning("sized prep: could not open %s", target)
+            return None
+        cfg = com(doc, "GetConfigurationByName", size)
+        if cfg is None:
+            logger.warning("sized prep: config %r not found in %s", size, row["rel"])
+            return None
+        if not com(doc, "ShowConfiguration2", size):  # activates the size
+            logger.warning("sized prep: ShowConfiguration2 failed for %r", size)
+            return None
+        if not com(doc, "EditRebuild3"):
+            logger.warning("sized prep: rebuild failed for %r", size)
+            return None
+        if not com(doc, "Save3", 0, errors, warnings):
+            logger.warning("sized prep: save failed for %r", size)
+            return None
+        return str(target)
+    except Exception as error:
+        logger.warning("sized prep failed for %s %r: %s", row["rel"], size, error)
+        return None
+    finally:
+        if doc is not None:
+            try:
+                com(app, "CloseDoc", com(doc, "GetTitle"))
+            except Exception:
+                pass
 
 
 @tool(
@@ -220,8 +311,10 @@ def get_standard_part_sizes(sw, standard: str, type: str = "",
         "Insert a standard part (e.g. ISO 4017 M10 x 40) into the active "
         "assembly at x,y,z. Resolves the part from the synced library and "
         "delegates to insert_component. Pass size= (a string like 'ISO 4762 "
-        "M10 x 16 - 16N') to insert a materialised Toolbox configuration; "
-        "without size the part's default configuration is inserted."
+        "M10 x 16 - 16N') to insert that exact Toolbox size: the part is "
+        "JIT-prepared (a writable copy is switched to the size configuration, "
+        "rebuilt and saved, then inserted). Without size the part's default "
+        "configuration is inserted."
     ),
     schema={
         "type": "object",
@@ -257,8 +350,9 @@ def insert_standard_part(sw, standard: str, type: str = "", file: str = "",
     if err:
         return err
 
-    configuration = ""
     if size:
+        # verified live: a Toolbox part ignores the configuration name passed
+        # to AddComponent5; the requested size must be materialised first
         part_sizes = sizes.get(row["rel"], [])
         wanted = size.strip().casefold()
         exact = next((s for s in part_sizes if s.casefold() == wanted), None)
@@ -270,15 +364,25 @@ def insert_standard_part(sw, standard: str, type: str = "", file: str = "",
                 {"code": "SIZE_NOT_AVAILABLE",
                  "available": part_sizes[:50],
                  "available_count": len(part_sizes)})
-        configuration = exact
-
-    copy = _source_copy(lib, row)
-    filepath = str(copy) if copy.is_file() else row.get("path")
-    if not filepath or not os.path.isfile(filepath):
-        return sw._result(
-            False,
-            f"Part file missing: {filepath}. " + SYNC_HINT,
-            SwErrors.swFileNotFoundError, {"code": "STANDARD_PART_FILE_MISSING"})
+        filepath = _prepare_sized_copy(sw, lib, row, exact)
+        if filepath is None:
+            return sw._result(
+                False,
+                f"Could not prepare size {exact!r} (toolbox part must be "
+                f"rebuilt with that configuration).",
+                SwErrors.swFeatureError,
+                {"code": "SIZE_PREPARATION_FAILED",
+                 "size": exact, "rel": row["rel"]})
+        configuration = ""
+    else:
+        filepath = _master_file(lib, row)
+        configuration = ""
+        if not filepath or not os.path.isfile(filepath):
+            return sw._result(
+                False,
+                f"Part file missing: {filepath}. " + SYNC_HINT,
+                SwErrors.swFileNotFoundError,
+                {"code": "STANDARD_PART_FILE_MISSING"})
 
     result = insert_component(sw, filepath=filepath, x=x, y=y, z=z,
                               place=place, configuration=configuration)
@@ -287,6 +391,7 @@ def insert_standard_part(sw, standard: str, type: str = "", file: str = "",
             **(result.get("data") or {}),
             "standard": row["standard"], "type": row["type"],
             "file": row["file"],
+            "requested_size": size or None,
             "configuration": configuration or None,
             "library_source": row["source"],
         }

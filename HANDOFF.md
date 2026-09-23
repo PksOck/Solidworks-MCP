@@ -138,10 +138,13 @@ size configurations (e.g. `ISO 4762 M10 x 16 - 16N`, `DIN 912 M20x1.5 x 30 --- 3
 during the long COM scan; the script now reconnects and stops gracefully with a
 partial journal (`sizes.cache.tsv`), so re-runs resume.
 
-Next recommended slice (plan order): MCP tools `list_standard_parts`,
-`get_standard_part_sizes`, `insert_standard_part` (reusing `insert_component`)
-and `sync_standard_library`, then JIT size generation. Unit tests:
-`solidworks_mcp/tests/test_stdlib_sync.py` (11 tests, all pass).
+Next recommended slice (plan order): the MCP tools are done and the JIT size
+recipe is verified; remaining ideas: (a) prefetch all sizes for the 70 sized
+masters with a `--prefetch-sizes` CLI pass so inserts are instant offline,
+(b) scan the remaining standards (GB/JIS/BSI/...) with
+`--scan-standard X --scan-sizes` (resumable via sizes.cache.tsv), (c) optional
+live verification suite for `insert_standard_part` in
+`solidworks_mcp/tests/live/`. Full sweep: 456 OK (38 skipped).
 
 **Done 2026-09-23 (2nd slice):** the four MCP tools are implemented in
 `solidworks_mcp/tools/standard_parts.py` —
@@ -149,9 +152,22 @@ and `sync_standard_library`, then JIT size generation. Unit tests:
 `standard_library_status` (the planned `sync_standard_library` MCP tool was
 dropped: PathPolicy forbids MCP writes into the repo; sync stays a CLI and the
 LLM gets status + the shell command instead). `insert_component` gained an
-optional `configuration=` (AddComponent5 with UseConfigName). Tests:
-`solidworks_mcp/tests/test_standard_parts.py` (14, pass); full sweep 453 OK.
+optional `configuration=` and a verified "open part then retry" fallback for
+Toolbox parts. Tests: `solidworks_mcp/tests/test_standard_parts.py` (15,
+pass) + 2 retry tests in `test_assembly_units.py`; full sweep 456 OK.
 `--copy-sized` fixed (rel_tail) → 36 unique sized masters in `source/`.
+
+**3rd slice (2026-09-23) — verified live by measurement:** `insert_component`
+now opens the part and retries when a closed-document AddComponent5 returns
+None (the Toolbox browser parts were being rejected silently). And the correct
+way to insert a *specific* Toolbox size is JIT materialisation, because
+AddComponent5 with a configuration name silently uses the part's active
+configuration: writable copy → `ShowConfiguration2(size)` (1 arg) →
+`EditRebuild3` → `Save3` → insert. Live end-to-end:
+`insert_standard_part(ISO, "socket head cap", "ISO 4762 M10 x 16 - 16N")`
+inserted a component measuring **26 mm** (M10×16 is ~16 mm shank + head;
+requesting the config name directly had given 110 mm = the `-100N` config).
+Prepared copies cache in `standard_library/sized/` (gitignored).
 
 ## Live test strategy (changed 2026-09-22)
 

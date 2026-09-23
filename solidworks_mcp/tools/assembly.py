@@ -194,6 +194,28 @@ def _open_part_box(sw, filepath):
             max(b[4] for b in boxes), max(b[5] for b in boxes))
 
 
+def _open_part_for_insert(sw, filepath):
+    """Open a part document (silent, read-only) so a later AddComponent5 can
+    reference it. Toolbox browser parts are rejected by AddComponent5 when
+    their document is closed; opening first is the verified workaround."""
+    app = getattr(sw, "app", None)
+    if app is None:
+        return None
+    if hasattr(app, "_oleobj_"):  # typed wrapper rejects VARIANT byref
+        import win32com.client
+        app = win32com.client.dynamic.Dispatch(app)
+    import pythoncom
+    import win32com.client as wc
+    errors = wc.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    warnings = wc.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+    try:
+        # swOpenDocOptions_Silent | swOpenDocOptions_ReadOnly
+        return com(app, "OpenDoc6", filepath, 1, 1 | 2, "", errors, warnings)
+    except Exception as e:
+        logger.warning("could not open %s for insert: %s", filepath, e)
+        return None
+
+
 @tool(
     name="insert_component",
     description=(
@@ -268,9 +290,34 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
                           SwErrors.swUnknownError)
 
     if comp is None:
-        detail = f" (configuration '{configuration}')" if configuration else ""
-        return sw._result(False, f"Could not insert {filepath}{detail}.",
-                          SwErrors.swFeatureError)
+        # Toolbox browser parts (and some library parts) are rejected by a
+        # closed-document AddComponent5 -- it returns None with no error.
+        # Opening the part first makes the insert work (verified live).
+        opened = _open_part_for_insert(sw, filepath)
+        if opened is None:
+            detail = f" (configuration '{configuration}')" if configuration else ""
+            return sw._result(False, f"Could not insert {filepath}{detail}.",
+                              SwErrors.swFeatureError)
+        try:
+            try:
+                comp = com(asm, "AddComponent5", filepath,
+                           SW_ADD_COMPONENT_DEFAULT_CONFIG,
+                           configuration, bool(configuration), "", x, y, z)
+            except Exception as e:
+                logger.error(f"AddComponent5 (retry, part open) failed: {e}")
+                return sw._result(False, f"Could not insert component: {e}",
+                                  SwErrors.swUnknownError)
+            if comp is None:
+                detail = f" (configuration '{configuration}')" if configuration else ""
+                return sw._result(False, f"Could not insert {filepath}{detail}.",
+                                  SwErrors.swFeatureError)
+        finally:
+            sw_app = getattr(sw, "app", None)
+            if sw_app is not None:
+                try:
+                    com(sw_app, "CloseDoc", com(opened, "GetTitle"))
+                except Exception:
+                    pass
 
     return sw._result(
         True,

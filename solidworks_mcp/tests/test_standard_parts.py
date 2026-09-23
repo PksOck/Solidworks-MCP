@@ -170,13 +170,21 @@ class InsertStandardPartTests(LibraryCase):
         self.assertEqual("", calls[0]["configuration"])
         self.assertIn("standard", result["data"])
 
-    def test_insert_with_size_passes_configuration(self):
+    def test_insert_with_size_prepares_copy_then_inserts_default(self):
         source_dir = self.root / "source" / "ISO" / "bolts and screws" \
             / "hexagon socket head screws"
         source_dir.mkdir(parents=True)
         (source_dir / "socket head cap screw_iso.sldprt").write_bytes(b"part")
+        prepared = self.root / "sized" / "ISO" / "prepared.sldprt"
+
+        def prepare(sw, lib, row, size):
+            self.assertEqual("ISO 4762 M10 x 16 - 16N", size)
+            prepared.parent.mkdir(parents=True, exist_ok=True)
+            prepared.write_bytes(b"prepared")
+            return str(prepared)
 
         calls = []
+        sp._prepare_sized_copy = prepare
         sp.insert_component = lambda sw, **kwargs: (
             calls.append(kwargs) or
             {"success": True, "message": "inserted", "data": {"name": "x"}})
@@ -185,10 +193,26 @@ class InsertStandardPartTests(LibraryCase):
                 Automation(), standard="ISO", type="socket head cap",
                 size="ISO 4762 M10 x 16 - 16N")
         finally:
+            sp._prepare_sized_copy = _original_prepare_sized_copy
             sp.insert_component = _original_insert_component
 
         self.assertTrue(result["success"], result["message"])
-        self.assertEqual("ISO 4762 M10 x 16 - 16N", calls[0]["configuration"])
+        self.assertEqual(prepared, Path(calls[0]["filepath"]))
+        self.assertEqual("", calls[0]["configuration"])
+        self.assertEqual("ISO 4762 M10 x 16 - 16N",
+                         result["data"]["requested_size"])
+
+    def test_size_preparation_failure_reports_clean_error(self):
+        sp._prepare_sized_copy = lambda sw, lib, row, size: None
+        try:
+            result = sp.insert_standard_part(
+                Automation(), standard="ISO", type="socket head cap",
+                size="ISO 4762 M10 x 16 - 16N")
+        finally:
+            sp._prepare_sized_copy = _original_prepare_sized_copy
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SIZE_PREPARATION_FAILED", result["data"]["code"])
 
     def test_unknown_size_reports_available_sizes(self):
         result = sp.insert_standard_part(
@@ -224,6 +248,7 @@ class StatusTests(LibraryCase):
 
 
 _original_insert_component = sp.insert_component
+_original_prepare_sized_copy = sp._prepare_sized_copy
 
 if __name__ == "__main__":
     unittest.main()
