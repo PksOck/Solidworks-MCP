@@ -1,4 +1,4 @@
-"""Revolved, swept and lofted cuts (M2.1); live evidence in api-findings §31."""
+"""Revolved, swept, lofted and boundary features (M2.1); api-findings §31-32."""
 
 import math
 import unittest
@@ -8,7 +8,9 @@ from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tests.test_sweep_loft import (
     Automation, Document, Feature, FeatureManager,
 )
-from solidworks_mcp.tools.advanced_features import loft_cut, revolve_cut, sweep_cut
+from solidworks_mcp.tools.advanced_features import (
+    boundary_boss, boundary_cut, loft_cut, revolve_cut, sweep_cut,
+)
 
 
 class CutFeatureManager(FeatureManager):
@@ -118,3 +120,85 @@ class LoftCutTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("FEATURE_REBUILD_FAILED", result["data"]["code"])
         self.assertEqual(1, automation.document.edit_delete_calls)
+
+
+class NetBlendFeatureManager(FeatureManager):
+    """InsertNetBlend returns None even on success (live, SW 2025 SP1.1)."""
+
+    def __init__(self, document, created=True, error_code=0):
+        super().__init__(created, error_code)
+        self.document = document
+        self.curve_data = []
+        self.direction_data = []
+        self.net_blend_args = None
+
+    def SetNetBlendCurveData(self, *args):
+        self.curve_data.append(args)
+
+    def SetNetBlendDirectionData(self, *args):
+        self.direction_data.append(args)
+
+    def InsertNetBlend(self, *args):
+        self.net_blend_args = args
+        if self.created:
+            type_name = "NetBlendCut" if args[0] == 3 else "NetBlend"
+            self.document.last = Feature("Boundary1", type_name,
+                                         error_code=self.error_code)
+        return None
+
+
+class NetBlendDocument(Document):
+    def __init__(self, created=True, error_code=0):
+        super().__init__(created, error_code)
+        self.FeatureManager = NetBlendFeatureManager(self, created, error_code)
+        self.last = self.path
+
+    def FeatureByPositionReverse(self, position):
+        return self.last
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_boundary_tools_are_registered_as_mutations(self):
+        tools = {item.name: item for item in registered_tools()}
+
+        for name in ("boundary_boss", "boundary_cut"):
+            with self.subTest(name=name):
+                self.assertIs(OperationClass.MUTATE, operation_class_for(name))
+                schema = tools[name].inputSchema["properties"]["profile_sketches"]
+                self.assertEqual((2, 3), (schema["minItems"], schema["maxItems"]))
+
+    def test_profiles_get_the_direction_one_marks_in_order(self):
+        automation = Automation(NetBlendDocument())
+
+        result = boundary_boss(automation, ["Sketch2", "Sketch1"])
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([(False, 8193)], automation.document.path.select_calls)
+        self.assertEqual([(True, 16385)], automation.document.profile.select_calls)
+        manager = automation.document.FeatureManager
+        self.assertEqual([0, 1], [args[1] for args in manager.curve_data])
+        self.assertEqual(1, manager.net_blend_args[0])  # boss
+        self.assertEqual(2, manager.net_blend_args[1])  # curves in direction 1
+        self.assertEqual("Boundary1", result["data"]["feature_name"])
+
+    def test_the_cut_uses_type_three(self):
+        automation = Automation(NetBlendDocument())
+
+        result = boundary_cut(automation, ["Sketch2", "Sketch1"])
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(3, automation.document.FeatureManager.net_blend_args[0])
+
+    def test_no_new_feature_is_a_failure(self):
+        result = boundary_boss(Automation(NetBlendDocument(created=False)),
+                               ["Sketch2", "Sketch1"])
+
+        self.assertFalse(result["success"])
+
+    def test_more_than_three_profiles_are_rejected_before_com(self):
+        automation = Automation(NetBlendDocument())
+
+        result = boundary_boss(automation, ["A", "B", "C", "D"])
+
+        self.assertFalse(result["success"])
+        self.assertEqual(0, automation.active_doc_calls)

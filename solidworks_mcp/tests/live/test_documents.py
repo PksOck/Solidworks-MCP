@@ -17,7 +17,7 @@ from solidworks_mcp.tools.assembly import (
 )
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import (
-    loft_cut, loft_sketches, revolve_cut, shell_feature, sweep_cut, sweep_sketch,
+    boundary_boss, boundary_cut, loft_cut, loft_sketches, revolve_cut, shell_feature, sweep_cut, sweep_sketch,
 )
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.saving import save_document
@@ -765,6 +765,37 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertTrue(result["success"], result["message"])
         expected = 40 / 3 * (400 + 100 + math.sqrt(400 * 100))
         self.assertAlmostEqual(expected, before - self._total_volume_mm3(), delta=1.0)
+
+    def _two_square_profiles(self):
+        plane = create_reference_plane(self.automation, "Front Plane", 40, "mm")
+        self.assertTrue(plane["success"], plane["message"])
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
+        self._close_sketch()
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        first = self._last_sketch_name(document)
+        self._sketch_on_plane("Plane1")
+        self.assertTrue(self.automation.draw_rectangle(-5, -5, 5, 5, "mm")["success"])
+        self._close_sketch()
+        return [first, self._last_sketch_name(document)]
+
+    def test_boundary_boss_builds_a_frustum_without_saving(self):
+        self._new_part()
+
+        result = boundary_boss(self.automation, self._two_square_profiles())
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(9333.333, self._total_volume_mm3(), delta=1.0)
+
+    def test_boundary_cut_removes_a_frustum_without_saving(self):
+        before = self._box_100x100x40()
+
+        result = boundary_cut(self.automation, self._two_square_profiles())
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(9333.333, before - self._total_volume_mm3(), delta=1.0)
 
     def test_mirror_scratch_extrusion_about_front_plane_without_saving(self):
         self._new_part()

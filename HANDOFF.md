@@ -156,9 +156,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after M2.1 cuts: 105 requirements —
-90 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(65 verified live).
+Status after M2.1: 107 requirements —
+92 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(67 verified live).
 
 ## Sketch relations (M1.3, slice 1)
 
@@ -239,13 +239,17 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M2.1 remainder: boundary boss/cut and thicken (swFmThicken=21,
-   swFmThickenCut=22; FeatureBossThicken/FeatureCutThicken). Revolve, sweep
-   and loft cuts are done (`revolve_cut`, `sweep_cut`, `loft_cut`).
+1. M2.2 features (draft, rib, dome, hole wizard, ...). M2.1 is done except
+   thicken, which needs a surface body (FeatureBossThicken selects a surface
+   with mark 1), so it moves after M3 `planar_surface`.
 2. Rest of M2 part features, in the plan's order. Research each API on
    help.solidworks.com first (the site needs a real browser — use Playwright).
 
 ## Known traps (do not relearn)
+
+- `InsertNetBlend` (boundary boss/cut) returns `None` even when it succeeds;
+  read the new feature with `FeatureByPositionReverse(0)` and check its type
+  (`NetBlend` / `NetBlendCut`).
 
 - `draw_center_rectangle` passed two corners until 2026-09-23 (the API takes
   centre + corner) — every such rectangle was twice as large. Its construction

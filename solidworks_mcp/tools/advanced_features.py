@@ -460,3 +460,118 @@ def sweep_cut(sw, profile_sketch: str, path_sketch: str) -> dict:
 )
 def loft_cut(sw, profile_sketches) -> dict:
     return _loft(sw, profile_sketches, True)
+
+
+SW_NET_BLEND_BOSS = 1
+SW_NET_BLEND_CUT = 3
+
+
+def _boundary(sw, profile_sketches, cut):
+    label = "boundary cut" if cut else "boundary"
+    names = list(profile_sketches) if isinstance(profile_sketches, list) else []
+    names_valid = (
+        2 <= len(names) <= 3
+        and all(isinstance(name, str) and name.strip() for name in names)
+        and len(names) == len({name.strip() for name in names})
+    )
+    if not names_valid:
+        return sw._result(
+            False,
+            "profile_sketches must list two or three distinct non-empty sketch "
+            "names.",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED"},
+        )
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != SW_DOC_PART:
+        return sw._result(False, "Active document is not a part.",
+                          SwErrors.swInvalidFileType)
+
+    profiles = [_find_feature(document, name) for name in names]
+    missing = [name for name, profile in zip(names, profiles) if profile is None]
+    if missing:
+        return sw._result(False, f"Sketch not found: {', '.join(missing)}",
+                          SwErrors.swSelectionError)
+
+    try:
+        com(document, "ClearSelection2", True)
+        # Direction 1 curve marks are 8193, 16385, 24577 (InsertNetBlend help).
+        for position, profile in enumerate(profiles):
+            if not _select_with_mark(document, profile, position > 0,
+                                     8192 * (position + 1) + 1):
+                return sw._result(
+                    False, f"Could not select profile: {names[position]}",
+                    SwErrors.swSelectionError,
+                )
+        feature_manager = com(document, "FeatureManager")
+        for position in range(len(names)):
+            com(feature_manager, "SetNetBlendCurveData",
+                0, position, 0, 0.0, 1.0, True)
+        for direction in (0, 1):
+            com(feature_manager, "SetNetBlendDirectionData",
+                direction, 0, 0, False, False)
+        before = com(com(document, "FeatureByPositionReverse", 0), "Name")
+        # InsertNetBlend returns None even when it succeeds (api-findings §32),
+        # so the new feature is read back from the end of the tree.
+        com(feature_manager, "InsertNetBlend",
+            SW_NET_BLEND_CUT if cut else SW_NET_BLEND_BOSS, len(names), 0,
+            False, 1.0, True, True, True, True, False, 0.0, 0.0, False, 0,
+            False, False, 0.0, False, 0.0, False)
+        feature = com(document, "FeatureByPositionReverse", 0)
+        expected_type = "NetBlendCut" if cut else "NetBlend"
+        if (
+            com(feature, "Name") == before
+            or com(feature, "GetTypeName2") != expected_type
+        ):
+            feature = None
+    except Exception as create_error:
+        return sw._result(False, f"{label.capitalize()} creation failed: "
+                          f"{create_error}", SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+    return _finish_feature(
+        sw, document, feature,
+        f"Created {label} feature {{name}}.",
+        {"profile_sketches": names},
+    )
+
+
+_BOUNDARY_SCHEMA = {"type": "object", "properties": {
+    "profile_sketches": {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 2,
+        "maxItems": 3,
+    },
+}, "required": ["profile_sketches"]}
+
+
+@tool(
+    name="boundary_boss",
+    description=(
+        "Create a boundary boss through two or three ordered profile sketches "
+        "on the active part (one direction, no tangency conditions). Use exact "
+        "sketch feature names."
+    ),
+    schema=_BOUNDARY_SCHEMA,
+    operation_class=OperationClass.MUTATE,
+)
+def boundary_boss(sw, profile_sketches) -> dict:
+    return _boundary(sw, profile_sketches, False)
+
+
+@tool(
+    name="boundary_cut",
+    description=(
+        "Cut a boundary shape through two or three ordered profile sketches "
+        "from the active part (one direction, no tangency conditions)."
+    ),
+    schema=_BOUNDARY_SCHEMA,
+    operation_class=OperationClass.MUTATE,
+)
+def boundary_cut(sw, profile_sketches) -> dict:
+    return _boundary(sw, profile_sketches, True)
