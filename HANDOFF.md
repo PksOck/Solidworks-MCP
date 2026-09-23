@@ -1,12 +1,13 @@
 # SolidWorks MCP development handoff
 
-Updated: 2026-09-22
+Updated: 2026-09-23
 
 ## Resume point
 
 - Repository: `C:\Users\Jan\Documents\Claude-Solidworks mcp`
 - Branch: `additional-upgrades`
 - Latest implementation commit: `7d5c181` (`feat: draw equation-driven curves and pin down their mixed units`)
+  — next commit pending: standard parts library sync (see section below).
 - Do not push to a remote unless the user explicitly asks.
 - SolidWorks 2025 SP1.1 must be running for the opt-in live COM tests.
 
@@ -103,6 +104,40 @@ $env:SW_MCP_KEEP_REVIEW='1'
 
 Result: 51 unit tests in the edit module (323 in the full sweep); the live edit
 sequence runs in about 107 s and leaves every scratch part unsaved.
+
+## Standard parts library (Toolbox) — E slice, in progress
+
+The user confirmed plan-E question 3: standard parts (bolts/nuts/washers...) are
+in scope. Research + groundwork done 2026-09-23:
+
+- **Official Toolbox API 2025 is PDM/dialog-only** (swbrowser + sldtoolboxconfigureaddin);
+  there is NO headless "configure & insert". Verified on help.solidworks.com (Playwright).
+- **Sizes are not in master parts**: measured live — ISO/DIN fasteners, bearings,
+  profiles have only `Default` + `PreviewCfg`. Exception: parts SolidWorks has
+  configured already (e.g. `DIN 912 socket head cap screw 4762` carries configs
+  `DIN 912 M20x1.5 x 30 ...`). Insert works two ways: `AddComponent5(file,0,"",False,...)`
+  for Default, `AddComponent5(file,0,<config>,True,...)` for configured sizes.
+- **Data root**: `HKCU\Software\SolidWorks\SOLIDWORKS 2025\General\Toolbox Data
+  Location` (= `C:\SOLIDWORKS Data`). Masters in `<root>\browser\<std>\...`
+  (1844 files), custom in `<root>\Toolbox\<std>\...`, generated in `<root>\CopiedParts\`.
+  Toolbox part files with sizes appear there only after SolidWorks generates them.
+- **Architecture**: MCP reads its own library `solidworks_mcp/standard_library/`
+  (gitignored via inner `.gitignore` = `*`), filled by
+  `scripts/sync_standard_library.py` (catalog = filesystem walk, no COM;
+  `--scan-sizes` = COM, read-only, resumable; `--copy-sized`). Toolbox is one
+  inlet among three (sync / user drop-in / future JIT).
+- **Local docs (NOT committed, per repo convention)**: `docs/upgrade/E-assembly-in-shranjevanje.md`
+  (§10a), `docs/upgrade/STANDARDNI-DELI-KATALOG.md` (SLO ISO/DIN catalog mapped to
+  actual toolbox files), `docs/upgrade/STANDARD-LIBRARY-FLOW.md` (verification + commit flow).
+
+Expected state on this machine: `index.json` = 2404 parts in 19 standards
+(ISO 280, DIN 468, ANSI_Metric 148, SKF 20, UNISTRUT 204 ...). Size scan for
+ISO/DIN/Ansi Metric/SKF was running.
+
+Next recommended slice (plan order): MCP tools `list_standard_parts`,
+`get_standard_part_sizes`, `insert_standard_part` (reusing `insert_component`)
+and `sync_standard_library`, then JIT size generation. Unit tests:
+`solidworks_mcp/tests/test_stdlib_sync.py` (11 tests, all pass).
 
 ## Live test strategy (changed 2026-09-22)
 
