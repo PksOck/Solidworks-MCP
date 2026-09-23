@@ -11,6 +11,7 @@ from .export import _get_planar_face_by_index
 
 SW_DOC_PART = 1
 SW_FM_SWEEP = 17
+SW_FM_SWEEP_CUT = 18
 SW_LOFT_GUIDE_INFLUENCE_GLOBAL = 3
 
 
@@ -220,6 +221,10 @@ def shell_feature(sw, thickness: float, unit: str = "mm",
     operation_class=OperationClass.MUTATE,
 )
 def sweep_sketch(sw, profile_sketch: str, path_sketch: str) -> dict:
+    return _sweep(sw, profile_sketch, path_sketch, SW_FM_SWEEP, "sweep")
+
+
+def _sweep(sw, profile_sketch, path_sketch, definition, label):
     if (
         not isinstance(profile_sketch, str)
         or not profile_sketch.strip()
@@ -258,22 +263,22 @@ def sweep_sketch(sw, profile_sketch: str, path_sketch: str) -> dict:
             return sw._result(False, f"Could not select path: {path_sketch}",
                               SwErrors.swSelectionError)
         feature_manager = com(document, "FeatureManager")
-        feature_data = com(feature_manager, "CreateDefinition", SW_FM_SWEEP)
+        feature_data = com(feature_manager, "CreateDefinition", definition)
         if feature_data is None:
             return sw._result(
-                False, "SolidWorks could not create a sweep feature definition.",
+                False, f"SolidWorks could not create a {label} feature definition.",
                 SwErrors.swFeatureError,
             )
         feature = com(feature_manager, "CreateFeature", feature_data)
     except Exception as create_error:
-        return sw._result(False, f"Sweep creation failed: {create_error}",
-                          SwErrors.swFeatureError)
+        return sw._result(False, f"{label.capitalize()} creation failed: "
+                          f"{create_error}", SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
 
     return _finish_feature(
         sw, document, feature,
-        "Created sweep feature {name}.",
+        f"Created {label} feature {{name}}.",
         {"profile_sketch": profile_sketch, "path_sketch": path_sketch},
     )
 
@@ -294,6 +299,11 @@ def sweep_sketch(sw, profile_sketch: str, path_sketch: str) -> dict:
     operation_class=OperationClass.MUTATE,
 )
 def loft_sketches(sw, profile_sketches) -> dict:
+    return _loft(sw, profile_sketches, False)
+
+
+def _loft(sw, profile_sketches, cut):
+    label = "loft cut" if cut else "loft"
     names = list(profile_sketches) if isinstance(profile_sketches, list) else []
     names_valid = (
         len(names) >= 2
@@ -330,19 +340,123 @@ def loft_sketches(sw, profile_sketches) -> dict:
                     False, f"Could not select profile: {names[position]}",
                     SwErrors.swSelectionError,
                 )
+        if cut:
+            # Live-verified in api-findings §31; the tlb has no InsertCutBlend2.
+            feature = com(
+                document.FeatureManager, "InsertCutBlend",
+                False, True, False, 1.0, 0, 0, False, 0.0, 0.0, 0, True, True,
+            )
+        else:
+            feature = com(
+                document.FeatureManager, "InsertProtrusionBlend2",
+                False, True, True, 0, 0, 0, 0, 0, True, True, False,
+                0.0, 0.0, 0, True, True, True, SW_LOFT_GUIDE_INFLUENCE_GLOBAL,
+            )
+    except Exception as create_error:
+        return sw._result(False, f"{label.capitalize()} creation failed: "
+                          f"{create_error}", SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+    return _finish_feature(
+        sw, document, feature,
+        f"Created {label} feature {{name}}.",
+        {"profile_sketches": names},
+    )
+
+
+@tool(
+    name="revolve_cut",
+    description=(
+        "Revolve one closed sketch as a cut through the active part. The "
+        "sketch must hold exactly one centerline as the axis, so draw the "
+        "profile with draw_rectangle rather than draw_center_rectangle, whose "
+        "construction diagonals make the axis ambiguous. angle is in degrees."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch": {"type": "string"},
+        "angle": {"type": "number", "default": 360},
+    }, "required": ["sketch"]},
+    operation_class=OperationClass.MUTATE,
+)
+def revolve_cut(sw, sketch: str, angle: float = 360) -> dict:
+    if (
+        not isinstance(sketch, str) or not sketch.strip()
+        or isinstance(angle, bool) or not isinstance(angle, (int, float))
+        or not 0 < angle <= 360
+    ):
+        return sw._result(
+            False, "sketch must be a non-empty name and angle in (0, 360].",
+            SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"},
+        )
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != SW_DOC_PART:
+        return sw._result(False, "Active document is not a part.",
+                          SwErrors.swInvalidFileType)
+
+    profile = _find_feature(document, sketch)
+    if profile is None:
+        return sw._result(False, f"Sketch not found: {sketch}",
+                          SwErrors.swSelectionError)
+
+    try:
+        com(document, "ClearSelection2", True)
+        if not _select_with_mark(document, profile, False, 0):
+            return sw._result(False, f"Could not select sketch: {sketch}",
+                              SwErrors.swSelectionError)
+        # FeatureRevolve2 with IsCut=True (4th argument); live-verified §31.
         feature = com(
-            document.FeatureManager, "InsertProtrusionBlend2",
-            False, True, True, 0, 0, 0, 0, 0, True, True, False,
-            0.0, 0.0, 0, True, True, True, SW_LOFT_GUIDE_INFLUENCE_GLOBAL,
+            document.FeatureManager, "FeatureRevolve2",
+            True, True, False, True, False, False, 0, 0,
+            math.radians(angle), 0.0, False, False, 0.0, 0.0, 0, 0.0, 0.0,
+            True, True, True,
         )
     except Exception as create_error:
-        return sw._result(False, f"Loft creation failed: {create_error}",
+        return sw._result(False, f"Revolve cut creation failed: {create_error}",
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
 
     return _finish_feature(
         sw, document, feature,
-        "Created loft feature {name}.",
-        {"profile_sketches": names},
+        "Created revolve cut feature {name}.",
+        {"sketch": sketch, "angle": angle},
     )
+
+
+@tool(
+    name="sweep_cut",
+    description=(
+        "Sweep one closed profile sketch along one path sketch as a cut "
+        "through the active part. Use exact sketch feature names."
+    ),
+    schema={"type": "object", "properties": {
+        "profile_sketch": {"type": "string"},
+        "path_sketch": {"type": "string"},
+    }, "required": ["profile_sketch", "path_sketch"]},
+    operation_class=OperationClass.MUTATE,
+)
+def sweep_cut(sw, profile_sketch: str, path_sketch: str) -> dict:
+    return _sweep(sw, profile_sketch, path_sketch, SW_FM_SWEEP_CUT, "sweep cut")
+
+
+@tool(
+    name="loft_cut",
+    description=(
+        "Loft two or more ordered profile sketches as a cut through the "
+        "active part. Profile order follows the list order."
+    ),
+    schema={"type": "object", "properties": {
+        "profile_sketches": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 2,
+        },
+    }, "required": ["profile_sketches"]},
+    operation_class=OperationClass.MUTATE,
+)
+def loft_cut(sw, profile_sketches) -> dict:
+    return _loft(sw, profile_sketches, True)

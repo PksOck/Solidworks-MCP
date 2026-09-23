@@ -1,3 +1,4 @@
+import math
 import os
 import unittest
 from pathlib import Path
@@ -15,7 +16,9 @@ from solidworks_mcp.tools.assembly import (
     mate_coincident, mate_concentric, mate_distance,
 )
 from solidworks_mcp.tools.inspection import inspect_document
-from solidworks_mcp.tools.advanced_features import loft_sketches, shell_feature, sweep_sketch
+from solidworks_mcp.tools.advanced_features import (
+    loft_cut, loft_sketches, revolve_cut, shell_feature, sweep_cut, sweep_sketch,
+)
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.sheetmetal import (
@@ -28,6 +31,7 @@ from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
 from solidworks_mcp.tools.patterns import mirror_feature
 from solidworks_mcp.tools.reference_geometry import create_reference_plane
+from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
 
 
@@ -694,6 +698,73 @@ class LiveDocumentTargetTests(unittest.TestCase):
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
+
+    def _box_100x100x40(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(-50, -50, 50, 50, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extrusion = self.automation.extrude_sketch(40, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        return self._total_volume_mm3()
+
+    def test_revolve_cut_removes_a_half_ring_without_saving(self):
+        before = self._box_100x100x40()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        self.assertTrue(self.automation.draw_rectangle(10, -10, 20, 10, "mm")["success"])
+        self.assertTrue(draw_centerline(self.automation, 0, -30, 0, 30)["success"])
+        self._close_sketch()
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+
+        result = revolve_cut(self.automation, self._last_sketch_name(document))
+
+        self.assertTrue(result["success"], result["message"])
+        # Only the half of the ring in front of the Front plane is in the box.
+        expected = 0.5 * math.pi * (20 ** 2 - 10 ** 2) * 20
+        self.assertAlmostEqual(expected, before - self._total_volume_mm3(), delta=1.0)
+
+    def test_sweep_cut_removes_a_half_cylinder_without_saving(self):
+        before = self._box_100x100x40()
+        path = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(path["success"], path["message"])
+        self.assertTrue(self.automation.draw_line(0, 0, 60, 0, "mm")["success"])
+        self._close_sketch()
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        path_name = self._last_sketch_name(document)
+        self._sketch_on_plane("Right Plane")
+        self.assertTrue(draw_circle_radius(self.automation, 0, 0, 5)["success"])
+        self._close_sketch()
+
+        result = sweep_cut(self.automation, self._last_sketch_name(document), path_name)
+
+        self.assertTrue(result["success"], result["message"])
+        expected = 0.5 * math.pi * 5 ** 2 * 50
+        self.assertAlmostEqual(expected, before - self._total_volume_mm3(), delta=1.0)
+
+    def test_loft_cut_removes_a_frustum_without_saving(self):
+        before = self._box_100x100x40()
+        plane = create_reference_plane(self.automation, "Front Plane", 40, "mm")
+        self.assertTrue(plane["success"], plane["message"])
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
+        self._close_sketch()
+        document, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        first = self._last_sketch_name(document)
+        self._sketch_on_plane("Plane1")
+        self.assertTrue(self.automation.draw_rectangle(-5, -5, 5, 5, "mm")["success"])
+        self._close_sketch()
+
+        result = loft_cut(self.automation, [first, self._last_sketch_name(document)])
+
+        self.assertTrue(result["success"], result["message"])
+        expected = 40 / 3 * (400 + 100 + math.sqrt(400 * 100))
+        self.assertAlmostEqual(expected, before - self._total_volume_mm3(), delta=1.0)
 
     def test_mirror_scratch_extrusion_about_front_plane_without_saving(self):
         self._new_part()

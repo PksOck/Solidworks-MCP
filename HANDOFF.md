@@ -156,9 +156,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after M1.4: 102 requirements —
-87 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(62 verified live).
+Status after M2.1 cuts: 105 requirements —
+90 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(65 verified live).
 
 ## Sketch relations (M1.3, slice 1)
 
@@ -239,9 +239,18 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M2 part features, in the plan's order
+1. M2.1 remainder: boundary boss/cut and thicken (swFmThicken=21,
+   swFmThickenCut=22; FeatureBossThicken/FeatureCutThicken). Revolve, sweep
+   and loft cuts are done (`revolve_cut`, `sweep_cut`, `loft_cut`).
+2. Rest of M2 part features, in the plan's order. Research each API on
+   help.solidworks.com first (the site needs a real browser — use Playwright).
 
 ## Known traps (do not relearn)
+
+- `draw_center_rectangle` passed two corners until 2026-09-23 (the API takes
+  centre + corner) — every such rectangle was twice as large. Its construction
+  diagonals also make a revolve axis ambiguous; use `draw_rectangle` in
+  revolve profiles.
 
 - `CreateEquationSpline2` (3D equation curve) returns `None` for any
   non-integer range on a decimal-comma Windows locale; integer ranges and

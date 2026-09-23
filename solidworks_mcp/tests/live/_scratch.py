@@ -208,6 +208,10 @@ class ScratchPartTestCase(unittest.TestCase):
             self.assertGreaterEqual(self.counts(sketch)[0], expectation[1])
         elif kind == "construction":
             self.assertEqual(expectation[1], self.construction_count(sketch))
+        elif kind == "lengths":
+            for expected, measured in zip(expectation[1],
+                                          self.segment_lengths_mm(sketch)):
+                self.assertAlmostEqual(expected, measured, places=2)
         else:  # pragma: no cover - guards a typo in a test case table
             raise AssertionError(f"unknown expectation {kind!r}")
 

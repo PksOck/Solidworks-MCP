@@ -19,7 +19,7 @@ EXPECTED_TOOLS = {
     "draw_centerline": [1, 1, 0.0, 2, 2, 0.0],
     "draw_point": [1, 2, 0.0],
     "draw_circle_radius": [1, 2, 0.0, 3],
-    "draw_center_rectangle": [0.5, 1.5, 0.0, 4.5, 5.5, 0.0],
+    "draw_center_rectangle": [2.5, 3.5, 0.0, 4.5, 5.5, 0.0],  # centre, corner
     "draw_rectangle_3point_corner": [1, 2, 0.0, 3, 4, 0.0, 5, 6, 0.0],
     "draw_rectangle_3point_center": [1, 2, 0.0, 3, 4, 0.0, 5, 6, 0.0],
     "draw_parallelogram": [1, 2, 0.0, 3, 4, 0.0, 5, 6, 0.0],
@@ -264,7 +264,8 @@ class SketchEntityBehaviorTests(unittest.TestCase):
                     self.assertAlmostEqual(wanted * 0.001, actual, places=12)
                 self.assertEqual("mm", result["data"]["unit"])
 
-    def test_center_rectangle_uses_opposite_corners_of_the_center(self):
+    def test_center_rectangle_passes_the_centre_and_one_corner(self):
+        """Live: two opposite corners doubled the rectangle (1600000 mm3 box)."""
         automation = Automation()
 
         result = draw_center_rectangle(automation, cx=2.5, cy=3.5, width=4, height=4)
@@ -272,7 +273,9 @@ class SketchEntityBehaviorTests(unittest.TestCase):
         self.assertTrue(result["success"], result["message"])
         method, arguments = automation.document.SketchManager.calls[0]
         self.assertEqual("CreateCenterRectangle", method)
-        self.assertAlmostEqual(0.0005, arguments[0], places=12)
+        self.assertAlmostEqual(0.0025, arguments[0], places=12)
+        self.assertAlmostEqual(0.0035, arguments[1], places=12)
+        self.assertAlmostEqual(0.0045, arguments[3], places=12)
         self.assertAlmostEqual(0.0055, arguments[4], places=12)
 
     def test_non_positive_radius_is_rejected_before_com(self):

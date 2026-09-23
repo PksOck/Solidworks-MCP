@@ -173,7 +173,8 @@ def draw_center_rectangle(sw, cx: float = 0, cy: float = 0, width: float = 50,
     half_height = height / 2.0
     return _create_entity(
         sw, "CreateCenterRectangle",
-        [cx - half_width, cy - half_height, 0.0, cx + half_width, cy + half_height, 0.0],
+        # CreateCenterRectangle takes the centre and one corner (sldworks.tlb).
+        [cx, cy, 0.0, cx + half_width, cy + half_height, 0.0],
         unit,
         f"Center rectangle created: {width}x{height}{unit}.",
         {"center": [cx, cy], "width": width, "height": height},

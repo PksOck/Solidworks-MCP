@@ -98,7 +98,9 @@ class LiveSketchEntityTests(ScratchPartTestCase):
             [("counter", "GetLineCount", 4)])
         add("rectangle from its centre", "Front",
             [lambda: draw_center_rectangle(automation, *at((1, 1), 0, 0), 44, 30, "mm")],
-            [("counter", "GetLineCount", 6), ("construction", 2)])
+            [("counter", "GetLineCount", 6), ("construction", 2),
+             # Two diagonals, then the 44 x 30 sides: the size is not doubled.
+             ("lengths", (53.254, 53.254, 44.0, 44.0, 30.0, 30.0))])
         add("rectangle from three corners", "Front",
             [lambda: draw_rectangle_3point_corner(
                 automation, *at((2, 1), -25, -15), *at((2, 1), -25, 15),
