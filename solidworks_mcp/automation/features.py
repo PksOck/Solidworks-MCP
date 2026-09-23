@@ -485,105 +485,98 @@ class FeatureOperations:
             logger.error(f"Revolve error: {e}\n{traceback.format_exc()}")
             return self._result(False, f"Error: {e}", SwErrors.swFeatureError)
     
-    def fillet_edges(self, radius: float = 2, unit: str = None) -> Dict:
+    def _select_edge_points(self, doc, edge_points, unit):
+        """Select the edges through the given points; None or an error result."""
+        if not edge_points:
+            return None
+        com(doc, "ClearSelection2", True)
+        callout = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        for position, point in enumerate(edge_points):
+            x, y, z = (self._units.to_meters(value, unit) for value in point)
+            if not com(com(doc, "Extension"), "SelectByID2", "", "EDGE",
+                       x, y, z, position > 0, 0, callout, 0):
+                com(doc, "ClearSelection2", True)
+                return self._result(
+                    False, f"No edge found at point {list(point)}.",
+                    SwErrors.swSelectionError, {"code": "SELECTION_EMPTY"})
+        return None
+
+    def fillet_edges(self, radius: float = 2, unit: str = None,
+                     edge_points=None) -> Dict:
         """
-        Add fillet to selected edges
-        
-        Args:
-            radius: Fillet radius
-            unit: Unit for radius
-        
-        Returns:
-            Result dictionary
-        
-        Note: Select edges first using execute_python or manual selection
+        Add a constant-radius fillet to the edges through edge_points
+        (x, y, z in unit), or to the current selection when omitted.
         """
         try:
             doc, err = self.get_active_doc()
             if err:
                 return err
-            
+            err = self._select_edge_points(doc, edge_points, unit)
+            if err:
+                return err
+
             radius_m = self._units.to_meters(radius, unit)
-            
-            feat = None
-            method_used = ""
-            
-            # Method 1: FeatureFillet3
-            try:
-                feat = doc.FeatureManager.FeatureFillet3(
-                    195, radius_m, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-                )
-                if feat:
-                    method_used = "FeatureFillet3"
-            except Exception as e:
-                logger.debug(f"FeatureFillet3 failed: {e}")
-            
-            # Method 2: SimpleFillet
-            if feat is None:
-                try:
-                    feat = doc.FeatureManager.SimpleFillet(radius_m, True, True, True)
-                    if feat:
-                        method_used = "SimpleFillet"
-                except Exception as e:
-                    logger.debug(f"SimpleFillet failed: {e}")
-            
+            empty = win32com.client.VARIANT(pythoncom.VT_VARIANT, None)
+            # FeatureFillet3 (sldworks.tlb, 14 args): Options = Propagate(1) +
+            # UniformRadius(2), R1, R2, Rho, Ftyp = simple(0), OverflowType,
+            # ConicRhoType, then seven variable-radius arrays left empty.
+            feat = com(doc.FeatureManager, "FeatureFillet3",
+                       3, radius_m, 0.0, 0.0, 0, 0, 0,
+                       empty, empty, empty, empty, empty, empty, empty)
             if feat is None:
                 return self._result(False,
-                    "Fillet failed - select edges first (use execute_python to select edges programmatically)",
+                    "Fillet failed - give edge_points on the part's edges "
+                    "or select edges first.",
                     SwErrors.swFeatureError)
-            
+
             unit_str = unit or self._units.default_unit.value
-            
-            return self._result(True, f"Fillet: r={radius}{unit_str} [{method_used}]",
+            return self._result(True, f"Fillet: r={radius}{unit_str}",
                               SwErrors.swSuccess,
                               {"radius": radius, "unit": unit_str})
-            
+
         except Exception as e:
             logger.error(f"Fillet error: {e}\n{traceback.format_exc()}")
             return self._result(False, f"Error: {e}", SwErrors.swFeatureError)
-    
+
     # ========================================================================
     # Chamfer
     # ========================================================================
-    
+
     def chamfer_edges(self, distance: float = 2, angle: float = 45,
-                      unit: str = None) -> Dict:
+                      unit: str = None, edge_points=None) -> Dict:
         """
-        Add chamfer to selected edges
+        Add an angle-distance chamfer to the edges through edge_points
+        (x, y, z in unit), or to the current selection when omitted.
         """
         try:
             doc, err = self.get_active_doc()
             if err:
                 return err
-            
-            import math
+            err = self._select_edge_points(doc, edge_points, unit)
+            if err:
+                return err
+
             dist_m = self._units.to_meters(distance, unit)
-            angle_rad = math.radians(angle)
-            
-            feat = None
-            
-            try:
-                feat = doc.FeatureManager.InsertFeatureChamfer(
-                    1, dist_m, angle_rad, dist_m, 0, False, False
-                )
-            except Exception as e:
-                logger.debug(f"InsertFeatureChamfer failed: {e}")
-            
+            # InsertFeatureChamfer (8 args): Options = TangentPropagation(4),
+            # ChamferType = AngleDistance(1), Width, Angle, OtherDist,
+            # VertexChamDist1..3.
+            feat = com(doc.FeatureManager, "InsertFeatureChamfer",
+                       4, 1, dist_m, math.radians(angle), 0.0, 0.0, 0.0, 0.0)
             if feat is None:
                 return self._result(False,
-                    "Chamfer failed - select edges first",
+                    "Chamfer failed - give edge_points on the part's edges "
+                    "or select edges first.",
                     SwErrors.swFeatureError)
-            
+
             unit_str = unit or self._units.default_unit.value
-            
             return self._result(True, f"Chamfer: {distance}{unit_str} x {angle}\u00b0",
                               SwErrors.swSuccess,
                               {"distance": distance, "angle": angle, "unit": unit_str})
-            
+
         except Exception as e:
             logger.error(f"Chamfer error: {e}\n{traceback.format_exc()}")
             return self._result(False, f"Error: {e}", SwErrors.swFeatureError)
-    
+
     # ========================================================================
     # List Features (FIXED: properties not methods)
     # ========================================================================

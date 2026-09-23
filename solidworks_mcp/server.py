@@ -400,11 +400,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="fillet_edges",
-            description="Add fillet to selected edges.",
+            description="Add a constant-radius fillet to the edges through edge_points (or the selected edges).",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "radius": {"type": "number", "default": 2, "description": "Fillet radius"},
+                    "edge_points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "description": "Points [x, y, z] (in unit) lying on the edges to treat; omit to use the current selection"},
                     "unit": {"type": "string", "description": "Unit"}
                 },
                 "required": []
@@ -412,12 +413,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="chamfer_edges",
-            description="Add chamfer to selected edges.",
+            description="Add an angle-distance chamfer to the edges through edge_points (or the selected edges).",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "distance": {"type": "number", "default": 2, "description": "Chamfer distance"},
                     "angle": {"type": "number", "default": 45, "description": "Chamfer angle (degrees)"},
+                    "edge_points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "description": "Points [x, y, z] (in unit) lying on the edges to treat; omit to use the current selection"},
                     "unit": {"type": "string", "description": "Unit"}
                 },
                 "required": []
@@ -741,14 +743,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         elif name == "fillet_edges":
             result = sw_automation.fillet_edges(
                 arguments.get("radius", 2),
-                arguments.get("unit")
+                arguments.get("unit"),
+                arguments.get("edge_points"),
             )
         
         elif name == "chamfer_edges":
             result = sw_automation.chamfer_edges(
                 arguments.get("distance", 2),
                 arguments.get("angle", 45),
-                arguments.get("unit")
+                arguments.get("unit"),
+                arguments.get("edge_points"),
             )
         
         elif name == "list_features":

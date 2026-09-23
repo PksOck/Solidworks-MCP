@@ -811,6 +811,28 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertTrue(result["success"], result["message"])
         return before, self._total_volume_mm3()
 
+    def test_fillet_rounds_one_box_edge_given_by_a_point_without_saving(self):
+        before = self._box_100x100x40()
+        # The Front sketch lies in YZ, so this 40 mm edge runs along X.
+        result = self.automation.fillet_edges(5, "mm", edge_points=[[20, 50, 50]])
+        self.assertTrue(result["success"], result["message"])
+
+        removed = (5 ** 2 - math.pi * 5 ** 2 / 4) * 40
+        self.assertAlmostEqual(before - removed, self._total_volume_mm3(), places=2)
+
+    def test_chamfer_bevels_one_box_edge_given_by_a_point_without_saving(self):
+        before = self._box_100x100x40()
+        result = self.automation.chamfer_edges(5, 45, "mm", edge_points=[[20, 50, 50]])
+        self.assertTrue(result["success"], result["message"])
+
+        self.assertAlmostEqual(before - 5 * 5 / 2 * 40, self._total_volume_mm3(), places=2)
+
+    def test_fillet_reports_a_point_that_is_on_no_edge(self):
+        self._box_100x100x40()
+        result = self.automation.fillet_edges(5, "mm", edge_points=[[20, 0, 0]])
+        self.assertFalse(result["success"])
+        self.assertEqual("SELECTION_EMPTY", result["data"]["code"])
+
     def test_draft_tilts_the_four_sides_outward_without_saving(self):
         _, after = self._draft_box_sides(flip=False)
 
