@@ -575,3 +575,87 @@ def boundary_boss(sw, profile_sketches) -> dict:
 )
 def boundary_cut(sw, profile_sketches) -> dict:
     return _boundary(sw, profile_sketches, True)
+
+
+@tool(
+    name="draft_faces",
+    description=(
+        "Draft planar faces of the active part about a planar neutral face. "
+        "Face indices come from list_planar_faces on the current model state "
+        "(identify faces by area and point, not only by normal). angle is in "
+        "degrees; flip reverses the draft direction."
+    ),
+    schema={"type": "object", "properties": {
+        "angle": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 90},
+        "neutral_face_index": {"type": "integer", "minimum": 0},
+        "draft_face_indices": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 0},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+        "flip": {"type": "boolean", "default": False},
+    }, "required": ["angle", "neutral_face_index", "draft_face_indices"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draft_faces(sw, angle: float, neutral_face_index: int,
+                draft_face_indices, flip: bool = False) -> dict:
+    def is_index(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    faces = draft_face_indices if isinstance(draft_face_indices, list) else []
+    if (
+        isinstance(angle, bool) or not isinstance(angle, (int, float))
+        or not 0 < angle < 90
+        or not is_index(neutral_face_index)
+        or not faces or not all(is_index(index) for index in faces)
+        or len(faces) != len(set(faces)) or neutral_face_index in faces
+        or not isinstance(flip, bool)
+    ):
+        return sw._result(
+            False,
+            "angle must be in (0, 90); neutral_face_index and draft_face_indices "
+            "must be distinct non-negative integers with at least one drafted "
+            "face; flip must be boolean.",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED"},
+        )
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != SW_DOC_PART:
+        return sw._result(False, "Active document is not a part.",
+                          SwErrors.swInvalidFileType)
+
+    try:
+        com(document, "ClearSelection2", True)
+        # Neutral plane mark 1, faces to draft mark 2 (InsertMultiFaceDraft help).
+        for position, (face_index, mark) in enumerate(
+            [(neutral_face_index, 1)] + [(index, 2) for index in faces]
+        ):
+            face = _get_planar_face_by_index(document, face_index)
+            if face is None:
+                return sw._result(
+                    False,
+                    f"No current planar face at index {face_index}; re-run "
+                    "list_planar_faces.",
+                    SwErrors.swSelectionError,
+                )
+            if not _select_with_mark(document, face, position > 0, mark):
+                return sw._result(False, f"Could not select face {face_index}.",
+                                  SwErrors.swSelectionError)
+        feature = com(document.FeatureManager, "InsertMultiFaceDraft",
+                      math.radians(angle), flip, False, 0, False, False)
+    except Exception as create_error:
+        return sw._result(False, f"Draft creation failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+    return _finish_feature(
+        sw, document, feature,
+        "Created draft feature {name}.",
+        {"angle": angle, "neutral_face_index": neutral_face_index,
+         "draft_face_indices": faces, "flip": flip},
+    )

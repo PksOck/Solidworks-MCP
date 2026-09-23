@@ -156,9 +156,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after M2.1: 107 requirements —
-92 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(67 verified live).
+Status after M2.2 draft: 108 requirements —
+93 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(68 verified live).
 
 ## Sketch relations (M1.3, slice 1)
 
@@ -239,13 +239,18 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M2.2 features (draft, rib, dome, hole wizard, ...). M2.1 is done except
+1. M2.2 features (rib, dome, hole wizard, ...; draft is done as `draft_faces`). M2.1 is done except
    thicken, which needs a surface body (FeatureBossThicken selects a surface
    with mark 1), so it moves after M3 `planar_surface`.
 2. Rest of M2 part features, in the plan's order. Research each API on
    help.solidworks.com first (the site needs a real browser — use Playwright).
 
 ## Known traps (do not relearn)
+
+- `list_planar_faces` reports `ISurface.PlaneParams` normals, which can point
+  against the outward face normal (`IFace2.Normal` is correct) — backlog B25.
+  Pick faces by area/point, not by normal sign. In the default part template
+  here the Front Plane lies in YZ (a Front sketch extrudes along X).
 
 - `InsertNetBlend` (boundary boss/cut) returns `None` even when it succeeds;
   read the new feature with `FeatureByPositionReverse(0)` and check its type
