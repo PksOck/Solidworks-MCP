@@ -143,6 +143,16 @@ Next recommended slice (plan order): MCP tools `list_standard_parts`,
 and `sync_standard_library`, then JIT size generation. Unit tests:
 `solidworks_mcp/tests/test_stdlib_sync.py` (11 tests, all pass).
 
+**Done 2026-09-23 (2nd slice):** the four MCP tools are implemented in
+`solidworks_mcp/tools/standard_parts.py` —
+`list_standard_parts` / `get_standard_part_sizes` / `insert_standard_part` /
+`standard_library_status` (the planned `sync_standard_library` MCP tool was
+dropped: PathPolicy forbids MCP writes into the repo; sync stays a CLI and the
+LLM gets status + the shell command instead). `insert_component` gained an
+optional `configuration=` (AddComponent5 with UseConfigName). Tests:
+`solidworks_mcp/tests/test_standard_parts.py` (14, pass); full sweep 453 OK.
+`--copy-sized` fixed (rel_tail) → 36 unique sized masters in `source/`.
+
 ## Live test strategy (changed 2026-09-22)
 
 Do **not** create one scratch document per assertion. Both sketch live modules

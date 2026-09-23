@@ -24,5 +24,6 @@ from . import sketch_create  # noqa: F401
 from . import drawing_annotations  # noqa: F401
 from . import saving  # noqa: F401
 from . import imports  # noqa: F401
+from . import standard_parts  # noqa: F401
 
-__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements", "views", "history", "reference_geometry", "advanced_features", "sketch_edit", "sketch_entities", "drawing_annotations", "saving", "imports"]
+__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements", "views", "history", "reference_geometry", "advanced_features", "sketch_edit", "sketch_entities", "drawing_annotations", "saving", "imports", "standard_parts"]

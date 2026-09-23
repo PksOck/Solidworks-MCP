@@ -186,14 +186,27 @@ def harvest_copied_parts(data_root: str, dest: Path) -> int:
     return count
 
 
+def rel_tail(row: dict) -> str:
+    """Path of a catalog row relative to its standard folder.
+
+    Browser rows are already relative to ``browser/<standard>/``. Custom rows
+    are relative to ``Toolbox/`` and start with the standard folder, which is
+    stripped here so both sources share one layout under ``source/``.
+    """
+    rel = row["rel"]
+    if row.get("source") == "custom" and "/" in rel:
+        return rel.split("/", 1)[1]
+    return rel
+
+
 def copy_sized_masters(catalog: list[dict], sizes: dict, dest: Path) -> int:
     """Copy parts with materialised sizes into source/ (portability)."""
     count = 0
     for row in catalog:
         if not sizes.get(row["rel"]):
             continue
-        rel_tail = row["rel"].split("/", 1)[-1]
-        target = dest / "source" / row["standard"] / rel_tail
+        tail = rel_tail(row)
+        target = dest / "source" / row["standard"] / tail
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(row["path"], target)

@@ -219,13 +219,21 @@ def _open_part_box(sw, filepath):
                     "part's own origin lands on x,y,z."
                 ),
             },
+            "configuration": {
+                "type": "string",
+                "description": (
+                    "Optional configuration name to insert, e.g. a Toolbox size "
+                    "like 'ISO 4762 M10 x 16 - 16N'. Default: the part's "
+                    "default configuration."
+                ),
+            },
         },
         "required": ["filepath"]
     },
     operation_class=OperationClass.MUTATE,
 )
 def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float = 0.0,
-                     place: str = "center") -> dict:
+                     place: str = "center", configuration: str = "") -> dict:
     """Insert a component into the active assembly"""
     asm, err = _require_assembly(sw)
     if err:
@@ -253,20 +261,22 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
 
     try:
         comp = com(asm, "AddComponent5", filepath, SW_ADD_COMPONENT_DEFAULT_CONFIG,
-                   "", False, "", x, y, z)
+                   configuration, bool(configuration), "", x, y, z)
     except Exception as e:
         logger.error(f"AddComponent5 failed: {e}")
         return sw._result(False, f"Could not insert component: {e}",
                           SwErrors.swUnknownError)
 
     if comp is None:
-        return sw._result(False, f"Could not insert {filepath}.",
+        detail = f" (configuration '{configuration}')" if configuration else ""
+        return sw._result(False, f"Could not insert {filepath}{detail}.",
                           SwErrors.swFeatureError)
 
     return sw._result(
         True,
         f"Inserted {com(comp, 'Name2')}.",
-        data={"name": com(comp, "Name2"), "path": filepath}
+        data={"name": com(comp, "Name2"), "path": filepath,
+              "configuration": configuration or None}
     )
 
 
