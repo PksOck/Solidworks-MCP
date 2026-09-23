@@ -26,7 +26,9 @@ from solidworks_mcp.tools.sheetmetal import (
     flatten_sheet_metal, get_flat_pattern_info, get_sheet_metal_info,
 )
 from solidworks_mcp.tools.weldments import create_structural_member, list_weldment_profiles
-from solidworks_mcp.tools.export import export_step, export_stl, list_planar_faces
+from solidworks_mcp.tools.export import (
+    export_face_to_dxf, export_step, export_stl, list_planar_faces,
+)
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
 from solidworks_mcp.tools.patterns import mirror_feature
@@ -822,6 +824,75 @@ class LiveDocumentTargetTests(unittest.TestCase):
         slope = 2 * math.tan(math.radians(5))
         expected = 40 * 100 ** 2 - 40 ** 2 * 100 * slope + slope ** 2 * 40 ** 3 / 3
         self.assertAlmostEqual(expected, after, delta=1.0)
+
+    @staticmethod
+    def _dxf_line_points(path):
+        """Normalised end points of the LINE entities in an ASCII DXF."""
+        pairs = Path(path).read_text(errors="replace").splitlines()
+        codes = [(pairs[i].strip(), pairs[i + 1].strip())
+                 for i in range(0, len(pairs) - 1, 2)]
+        points, entity, values = [], None, {}
+        for code, value in codes + [("0", "EOF")]:
+            if code == "0":
+                if entity == "LINE":
+                    points += [(values["10"], values["20"]), (values["11"], values["21"])]
+                entity, values = value, {}
+            elif code in ("10", "20", "11", "21"):
+                values[code] = float(value)
+        min_x = min(x for x, _ in points)
+        min_y = min(y for _, y in points)
+        return {(round(x - min_x, 2), round(y - min_y, 2)) for x, y in points}
+
+    def test_planar_faces_report_outward_normals_and_dxf_is_not_mirrored(self):
+        self._new_part()
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        outline = [(0, 0), (60, 0), (60, 10), (10, 10), (10, 40), (0, 40), (0, 0)]
+        for start, end in zip(outline, outline[1:]):
+            self.assertTrue(self.automation.draw_line(*start, *end, "mm")["success"])
+        extrusion = self.automation.extrude_sketch(5, False, "mm")
+        self.assertTrue(extrusion["success"], extrusion["message"])
+        faces = list_planar_faces(self.automation)["data"]["faces"]
+        caps = [face for face in faces if round(face["area_mm2"]) == 900]
+        self.assertEqual(2, len(caps))
+
+        # B25: the two end caps face opposite ways.
+        dot = sum(a * b for a, b in zip(caps[0]["normal"], caps[1]["normal"]))
+        self.assertAlmostEqual(-1.0, dot, places=6)
+
+        # Face export needs a saved model path.
+        refused = export_face_to_dxf(self.automation, caps[0]["index"], "unused.dxf")
+        self.assertFalse(refused["success"])
+        root = Path(self.automation._path_policy.output_roots[0])
+        part_path = root / "saved" / "mcp_live_l_plate.SLDPRT"
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.created_titles.append(str(com(self.automation.get_active_doc()[0], "GetTitle")))
+
+        output_root = root / "exports"
+        shapes = []
+        for cap in caps:
+            path = output_root / f"scratch-{uuid4().hex}.dxf"
+            self.created_artifacts.append(str(path))
+            result = export_face_to_dxf(self.automation, cap["index"], str(path))
+            self.assertTrue(result["success"], result["message"])
+            shapes.append(self._dxf_line_points(path))
+
+        # Seen from outside, the two caps are mirror images of each other:
+        # no in-plane rotation maps one onto the other, but a mirror does.
+        def rotations(points):
+            result = []
+            for _ in range(4):
+                points = {(-y, x) for x, y in points}
+                min_x = min(x for x, _ in points)
+                min_y = min(y for _, y in points)
+                result.append({(round(x - min_x, 2), round(y - min_y, 2))
+                               for x, y in points})
+            return result
+
+        mirrored = {(-x, y) for x, y in shapes[1]}
+        self.assertNotIn(shapes[0], rotations(shapes[1]))
+        self.assertIn(shapes[0], rotations(mirrored))
 
     def test_mirror_scratch_extrusion_about_front_plane_without_saving(self):
         self._new_part()

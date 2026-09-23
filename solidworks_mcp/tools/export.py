@@ -160,7 +160,9 @@ def list_planar_faces(sw, min_area_mm2: float = 0.0) -> dict:
             if com(surface, "IsPlane"):
                 area_mm2 = com(face, "GetArea") * 1_000_000
                 if area_mm2 >= min_area_mm2:
-                    nx, ny, nz, px, py, pz = com(surface, "PlaneParams")[:6]
+                    px, py, pz = com(surface, "PlaneParams")[3:6]
+                    # The surface normal can point into the body (B25).
+                    nx, ny, nz = com(face, "Normal")[:3]
                     faces.append({
                         "index": index,
                         "body": body_name,
@@ -243,12 +245,14 @@ def _longest_edge_direction(face):
 
 def _face_plane_axes(face):
     """
-    Returns (normal, point, xdir, ydir) for a planar face: normal/point
-    from PlaneParams, xdir from the longest straight edge (projected into
+    Returns (normal, point, xdir, ydir) for a planar face: the outward
+    normal from IFace2.Normal (PlaneParams' normal can point into the body,
+    which mirrored the DXF -- B25), point from PlaneParams, xdir from the longest straight edge (projected into
     the plane), ydir = normal x xdir. All unit vectors, meters.
     """
     surface = com(face, "GetSurface")
-    nx, ny, nz, px, py, pz = com(surface, "PlaneParams")[:6]
+    px, py, pz = com(surface, "PlaneParams")[3:6]
+    nx, ny, nz = com(face, "Normal")[:3]
     normal = (nx, ny, nz)
     point = (px, py, pz)
 
@@ -315,6 +319,17 @@ def export_face_to_dxf(sw, face_index: int, output_path: str) -> dict:
     if ext not in (".dxf", ".dwg"):
         return sw._result(False, f"Unsupported output extension: {ext}",
                           SwErrors.swInvalidInput)
+
+    # ExportToDWG2 needs the model path as its base-name argument; with an
+    # unsaved part it fails with no explanation (same as flat patterns).
+    if not com(doc, "GetPathName"):
+        return sw._result(
+            False,
+            "SolidWorks needs a saved model path to export a face. "
+            "Save the part first (save_document) and retry.",
+            SwErrors.swFileSaveError,
+            {"code": "UNSAVED_DOCUMENT"},
+        )
 
     face = _get_planar_face_by_index(doc, face_index)
     if face is None:
