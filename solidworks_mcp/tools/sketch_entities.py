@@ -11,6 +11,7 @@ guessed; see docs/api-findings.md section 0.
 """
 
 import math
+import re
 
 import pythoncom
 import win32com.client
@@ -702,6 +703,144 @@ def draw_equation_curve(sw, expression: str, range_start: float,
             "endpoints": _curve_points(spline, factor),
             "spline_count": splines_after,
             "sketch_method": "CreateEquationSpline",
+        },
+    )
+
+
+def _plain_number(value):
+    """Fixed notation; the expression parser is not trusted with 1e-05."""
+    text = f"{value:.12f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
+def _remap_parameter(expression, start, end):
+    """Replace the parameter t with start + (end - start) * t over 0..1."""
+    mapped = f"({_plain_number(start)}+{_plain_number(end - start)}*t)"
+    return re.sub(r"\bt\b", mapped, expression)
+
+
+@tool(
+    name="draw_equation_curve_3d",
+    description=(
+        "Draw a parametric equation-driven curve x(t), y(t), z(t) in the "
+        "active 3D sketch (start one with create_3d_sketch). The expressions "
+        "use t, which runs from range_start to range_end, and give "
+        "coordinates in the requested unit. The offsets move the curve in X "
+        "and Y and a positive rotation turns it counter-clockwise about Z."
+    ),
+    schema={"type": "object", "properties": {
+        "x_expression": {"type": "string"},
+        "y_expression": {"type": "string"},
+        "z_expression": {"type": "string"},
+        "range_start": {"type": "number"},
+        "range_end": {"type": "number"},
+        "rotation_deg": {"type": "number", "default": 0},
+        "x_offset": {"type": "number", "default": 0},
+        "y_offset": {"type": "number", "default": 0},
+        "lock_start": {"type": "boolean", "default": False},
+        "lock_end": {"type": "boolean", "default": False},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["x_expression", "y_expression", "z_expression",
+                    "range_start", "range_end"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_equation_curve_3d(sw, x_expression: str, y_expression: str,
+                           z_expression: str, range_start: float,
+                           range_end: float, rotation_deg: float = 0,
+                           x_offset: float = 0, y_offset: float = 0,
+                           lock_start: bool = False, lock_end: bool = False,
+                           unit: str = "mm") -> dict:
+    expressions = (x_expression, y_expression, z_expression)
+    if any(not isinstance(text, str) or not text.strip()
+           for text in expressions):
+        return _invalid(sw, "x_expression, y_expression and z_expression "
+                            "must be non-empty equations in t.")
+    if any(not _is_number(value)
+           for value in (range_start, range_end, rotation_deg, x_offset,
+                         y_offset)):
+        return _invalid(sw, "The range, rotation and offsets must be finite "
+                            "numbers.")
+    if range_start == range_end:
+        return _invalid(sw, "range_start and range_end must differ.")
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    sketch = com(document, "GetActiveSketch2")
+    if sketch is None or not bool(com(sketch, "Is3D")):
+        return sw._result(
+            False,
+            "No 3D sketch is active; start one with create_3d_sketch first.",
+            SwErrors.swSketchError,
+            {"code": "NOT_A_3D_SKETCH"},
+        )
+    document_factor, document_unit = _document_linear_unit(document)
+    if document_factor is None:
+        return sw._result(
+            False,
+            "The document uses a linear unit this tool cannot convert; set "
+            "the document to mm, cm, m or inch first.",
+            SwErrors.swSketchError,
+            {"code": "UNSUPPORTED_DOCUMENT_UNIT"},
+        )
+    try:
+        factor = sw._units.to_meters(1.0, unit)
+        x_offset_meters = sw._units.to_meters(x_offset, unit)
+        y_offset_meters = sw._units.to_meters(y_offset, unit)
+    except (KeyError, TypeError, ValueError) as conversion_error:
+        return _invalid(sw, f"Invalid unit or value: {conversion_error}")
+
+    # CreateEquationSpline2 returns None for any non-integer range on a
+    # decimal-comma locale, so the range is always 0..1 (api-findings §30).
+    scale = factor / document_factor
+    sent = []
+    for text in expressions:
+        mapped = _remap_parameter(text, range_start, range_end)
+        if not math.isclose(scale, 1.0):
+            mapped = f"({mapped})*{_plain_number(scale)}"
+        sent.append(mapped)
+
+    splines_before = _spline_count(document)
+    try:
+        spline = com(
+            com(document, "SketchManager"), "CreateEquationSpline2",
+            *sent, 0.0, 1.0, False, math.radians(rotation_deg),
+            x_offset_meters, y_offset_meters,
+            bool(lock_start), bool(lock_end),
+        )
+    except Exception as create_error:
+        return sw._result(
+            False, f"Equation curve failed: {create_error}",
+            SwErrors.swSketchError,
+        )
+    splines_after = _spline_count(document)
+    if spline is None or (splines_before is not None
+                          and splines_after is not None
+                          and splines_after <= splines_before):
+        return sw._result(
+            False,
+            "Equation curve failed: no new spline appeared in the 3D sketch. "
+            "Check the expressions.",
+            SwErrors.swSketchError,
+            {"code": "EQUATION_CURVE_FAILED"},
+        )
+
+    return sw._result(
+        True,
+        f"3D equation curve created for t from {range_start} to {range_end}.",
+        SwErrors.swSuccess,
+        {
+            "expressions": list(expressions),
+            "sent_expressions": sent,
+            "range": [range_start, range_end],
+            "document_unit": document_unit,
+            "rotation_deg": rotation_deg,
+            "offsets": [x_offset, y_offset],
+            "unit": unit,
+            "curve_length": round(float(com(spline, "GetLength")) / factor, 6),
+            "endpoints": _curve_points(spline, factor),
+            "spline_count": splines_after,
+            "sketch_method": "CreateEquationSpline2",
         },
     )
 

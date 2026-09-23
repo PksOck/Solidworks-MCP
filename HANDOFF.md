@@ -43,7 +43,7 @@ ordered backlog:
 | M1.1 | Sketch entities | done: 21 entity tools plus the equation-driven curve, all live-verified in one sequence |
 | M1.2 | Sketch editing | slices 1–3 done: fillet, chamfer, offset, mirror, split, linear and circular patterns, scale, construction toggle, rotate |
 | M1.3 | Sketch relations, dimensions and text | done (add/list/delete relations, status, driving dimension, sketch text) |
-| M1.4 | Sketching on model geometry and 3D sketches | done (plane, 3D sketch, convert entities); 3D equation curve still open |
+| M1.4 | Sketching on model geometry and 3D sketches | done (plane, 3D sketch, convert entities, 3D equation curve) |
 | M2 | Part features, bodies, reference geometry, attributes | in progress from older work |
 | M3 | Surface modeling | not started |
 | M4 | Sheet metal, weldments, assembly, drawings, simulation | mixed |
@@ -156,9 +156,9 @@ Local generated reports (excluded by repository policy; regenerate with):
 .venv\Scripts\python.exe scripts\audit_capabilities.py --root . --requirements scripts\capability_requirements.json --output-json docs\upgrade\specs\capability-register.json --output-markdown docs\upgrade\specs\CAPABILITY-REGISTER.md
 ```
 
-Status after M1.4: 101 requirements —
-86 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
-(61 verified live).
+Status after M1.4: 102 requirements —
+87 registered, 4 internal_only, 9 absent, 1 superseded, 1 blocked
+(62 verified live).
 
 ## Sketch relations (M1.3, slice 1)
 
@@ -189,7 +189,7 @@ section 27.
 
 `draw_equation_curve` lives in `solidworks_mcp/tools/sketch_entities.py` and
 wraps `ISketchManager.CreateEquationSpline` (the 2D `y = f(x)` form; the 3D
-`CreateEquationSpline2` needs a 3D sketch and waits for M1.4).
+`CreateEquationSpline2` form is `draw_equation_curve_3d`, see below).
 
 The trap is mixed units, measured live and recorded in `docs/api-findings.md`
 section 26:
@@ -239,13 +239,14 @@ never with segment lengths alone.
 
 Recommended next items, in the plan's order:
 
-1. M1.4 remainder: the 3D equation-driven curve
-   (`ISketchManager.CreateEquationSpline2(XExpression, YExpression,
-   ZExpression, RangeStart, RangeEnd, IsAngleRange, RotationAngle, XOffset,
-   YOffset, LockStart, LockEnd)`, backlog B24) inside the new 3D sketch
-2. M2 part features, in the plan's order
+1. M2 part features, in the plan's order
 
 ## Known traps (do not relearn)
+
+- `CreateEquationSpline2` (3D equation curve) returns `None` for any
+  non-integer range on a decimal-comma Windows locale; integer ranges and
+  decimals inside the expressions work. `draw_equation_curve_3d` always sends
+  0..1 and remaps `t` in the expressions (`docs/api-findings.md` section 30).
 
 - `IModelDoc2.EditSketch` is void and returns `None` on success.
 - `SketchTrim` returns `False` for `swSketchTrimClosest` even when it trims;

@@ -18,7 +18,8 @@ from solidworks_mcp.tools.sketch_create import (
 from solidworks_mcp.tools.sketch_entities import (
     convert_entities, draw_arc_slot, draw_arc_slot_3point,
     draw_center_rectangle, draw_centerline, draw_circle_radius, draw_ellipse,
-    draw_elliptical_arc, draw_equation_curve, draw_parallelogram, draw_parabola,
+    draw_elliptical_arc, draw_equation_curve, draw_equation_curve_3d,
+    draw_parallelogram, draw_parabola,
     draw_point, draw_rectangle_3point_center, draw_rectangle_3point_corner,
     draw_sketch_text, draw_tangent_arc,
 )
@@ -47,6 +48,7 @@ class LiveSketchEntityTests(ScratchPartTestCase):
         self._plane_step(len(cases) + 5)
         self._convert_step(len(cases) + 6)
         self._sketch_3d_step(len(cases) + 7)
+        self._equation_3d_step(len(cases) + 8)
         self.assert_unsaved()
 
     def _step(self, index, purpose, plane, calls, expectations):
@@ -297,6 +299,31 @@ class LiveSketchEntityTests(ScratchPartTestCase):
         closed = self.sketch(sketch)
         self.assertTrue(bool(com(closed, "Is3D")))
         self.assertEqual(1, self.segment_count(sketch))
+
+    def _equation_3d_step(self, index):
+        """One full helix turn over a non-integer range (0..2*pi).
+
+        CreateEquationSpline2 itself rejects that range on a decimal-comma
+        locale; the tool remaps t onto 0..1, and the arc length proves it.
+        """
+        result = create_3d_sketch(self.automation)
+        self.assertTrue(result["success"], result["message"])
+        sketch = result["data"]["sketch"]
+        radius, pitch = 10.0, 12.0
+        helix = draw_equation_curve_3d(
+            self.automation, f"{radius}*cos(t)", f"{radius}*sin(t)",
+            f"{pitch / (2 * math.pi)}*t", 0, 2 * math.pi, x_offset=-200)
+        self.assertTrue(helix["success"], helix["message"])
+        self.capture(index, "3d equation curve helix")
+        self.exit_sketch()
+
+        self.assertEqual(1, self.segment_count(sketch))
+        expected = math.hypot(2 * math.pi * radius, pitch)
+        self.assertAlmostEqual(expected, helix["data"]["curve_length"],
+                               delta=expected * 0.001)
+        self.assertEqual([-190.0, 0.0, 0.0], helix["data"]["endpoints"][0])
+        self.assertAlmostEqual(pitch, helix["data"]["endpoints"][1][2],
+                               places=3)
 
     def _plate_step(self, index):
         """One closed plate profile with five holes, then a boss extrusion."""

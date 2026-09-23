@@ -8,8 +8,9 @@ from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.sketch_entities import (
     convert_entities, draw_arc_slot, draw_arc_slot_3point,
     draw_center_rectangle, draw_centerline, draw_circle_radius, draw_ellipse,
-    draw_elliptical_arc, draw_equation_curve, draw_parallelogram, draw_parabola,
-    draw_point, draw_rectangle_3point_center, draw_rectangle_3point_corner,
+    draw_elliptical_arc, draw_equation_curve, draw_equation_curve_3d,
+    draw_parallelogram, draw_parabola, draw_point,
+    draw_rectangle_3point_center, draw_rectangle_3point_corner,
     draw_sketch_text, draw_tangent_arc,
 )
 
@@ -61,7 +62,8 @@ class SketchManager:
 
         def record(_bound_self, *args):
             self.calls.append((name, args))
-            if self.document is not None and name == "CreateEquationSpline":
+            if self.document is not None and name in (
+                    "CreateEquationSpline", "CreateEquationSpline2"):
                 self.document.segments.append(Segment(3))
             return self.result
 
@@ -106,6 +108,9 @@ class Sketch:
 
     def GetSketchTextSegments(self):
         return list(self.document.text_segments)
+
+    def Is3D(self):
+        return self.document.is_3d
 
 
 class SketchText:
@@ -154,6 +159,7 @@ class Document:
         self.selected = []
         self.selected_count = 0
         self.active_sketch = True
+        self.is_3d = False
         self.converted_segments = 0
         self.convert_ok = True
         self.convert_calls = []
@@ -540,6 +546,115 @@ class EquationCurveTests(unittest.TestCase):
         automation.document.SketchManager.document = None
 
         result = draw_equation_curve(automation, "sin(x)", 0, 10)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("EQUATION_CURVE_FAILED", result["data"]["code"])
+
+
+class EquationCurve3DTests(unittest.TestCase):
+    """CreateEquationSpline2 returns None for any non-integer range on a
+    decimal-comma Windows locale, so the tool always passes 0..1 and maps the
+    parameter inside the expressions; see docs/api-findings.md section 30."""
+
+    @staticmethod
+    def document(linear_unit=0):
+        document = Document(Spline(0.064076, [SketchPoint(0.01, 0.0),
+                                              SketchPoint(0.01, 0.0, 0.012566)]),
+                            linear_unit=linear_unit)
+        document.is_3d = True
+        return document
+
+    def test_the_tool_is_registered_as_a_mutation(self):
+        tools = {item.name: item for item in registered_tools()}
+
+        self.assertIn("draw_equation_curve_3d", tools)
+        self.assertIs(OperationClass.MUTATE,
+                      operation_class_for("draw_equation_curve_3d"))
+        self.assertEqual(
+            ["x_expression", "y_expression", "z_expression", "range_start",
+             "range_end"],
+            tools["draw_equation_curve_3d"].inputSchema["required"])
+
+    def test_the_range_is_always_zero_to_one_and_t_is_remapped(self):
+        document = self.document()
+        automation = Automation(document)
+
+        result = draw_equation_curve_3d(
+            automation, "10*cos(t)", "10*sin(t)", "2*t", 0.5, 6.7832,
+            rotation_deg=90, x_offset=1, y_offset=2)
+
+        self.assertTrue(result["success"], result["message"])
+        method, arguments = document.SketchManager.calls[0]
+        self.assertEqual("CreateEquationSpline2", method)
+        mapped = "(0.5+6.2832*t)"
+        self.assertEqual(f"10*cos({mapped})", arguments[0])
+        self.assertEqual(f"10*sin({mapped})", arguments[1])
+        self.assertEqual(f"2*{mapped}", arguments[2])
+        self.assertEqual((0.0, 1.0, False), arguments[3:6])
+        self.assertAlmostEqual(math.pi / 2, arguments[6], places=12)
+        self.assertAlmostEqual(0.001, arguments[7], places=12)
+        self.assertAlmostEqual(0.002, arguments[8], places=12)
+        self.assertEqual((False, False), arguments[9:11])
+        self.assertAlmostEqual(64.076, result["data"]["curve_length"], places=3)
+        self.assertEqual([[10.0, 0.0, 0.0], [10.0, 0.0, 12.566]],
+                         result["data"]["endpoints"])
+
+    def test_names_containing_t_are_left_alone(self):
+        automation = Automation(self.document())
+
+        draw_equation_curve_3d(automation, "sqrt(t)", "tan(t)", "t", 0, 2)
+
+        arguments = automation.document.SketchManager.calls[0][1]
+        self.assertEqual("sqrt((0+2*t))", arguments[0])
+        self.assertEqual("tan((0+2*t))", arguments[1])
+        self.assertEqual("(0+2*t)", arguments[2])
+
+    def test_expressions_are_scaled_from_the_unit_to_the_document_unit(self):
+        automation = Automation(self.document(linear_unit=3))  # inch
+
+        draw_equation_curve_3d(automation, "t", "0", "25.4", 0, 1, unit="mm")
+
+        arguments = automation.document.SketchManager.calls[0][1]
+        # Written in fixed notation: the expression parser is not trusted with 1e-05.
+        self.assertEqual("((0+1*t))*0.03937007874", arguments[0])
+        self.assertEqual("(25.4)*0.03937007874", arguments[2])
+
+    def test_a_2d_sketch_is_rejected(self):
+        document = self.document()
+        document.is_3d = False
+        automation = Automation(document)
+
+        result = draw_equation_curve_3d(automation, "t", "0", "0", 0, 1)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("NOT_A_3D_SKETCH", result["data"]["code"])
+        self.assertEqual([], document.SketchManager.calls)
+
+    def test_bad_input_is_rejected_before_any_com_call(self):
+        cases = (
+            {"x_expression": " "},
+            {"z_expression": None},
+            {"range_start": 1, "range_end": 1},
+            {"range_end": float("nan")},
+            {"rotation_deg": "0"},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                automation = Automation(self.document())
+                call = {"x_expression": "t", "y_expression": "0",
+                        "z_expression": "0", "range_start": 0, "range_end": 1}
+                call.update(overrides)
+
+                result = draw_equation_curve_3d(automation, **call)
+
+                self.assertFalse(result["success"])
+                self.assertEqual(0, automation.active_doc_calls)
+
+    def test_a_curve_that_adds_no_spline_is_a_failure(self):
+        automation = Automation(self.document())
+        automation.document.SketchManager.document = None
+
+        result = draw_equation_curve_3d(automation, "t", "0", "0", 0, 1)
 
         self.assertFalse(result["success"])
         self.assertEqual("EQUATION_CURVE_FAILED", result["data"]["code"])
