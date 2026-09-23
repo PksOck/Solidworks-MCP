@@ -247,9 +247,9 @@ Recommended next items, in the plan's order:
 
 ## Known traps (do not relearn)
 
-- `list_planar_faces` reports `ISurface.PlaneParams` normals, which can point
-  against the outward face normal (`IFace2.Normal` is correct) — backlog B25.
-  Pick faces by area/point, not by normal sign. In the default part template
+- `ISurface.PlaneParams` normals can point against the outward face normal;
+  always use `IFace2.Normal` (B25, fixed in list_planar_faces and DXF face
+  export). Face DXF export needs a saved part. In the default part template
   here the Front Plane lies in YZ (a Front sketch extrudes along X).
 
 - `InsertNetBlend` (boundary boss/cut) returns `None` even when it succeeds;
