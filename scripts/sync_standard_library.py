@@ -65,6 +65,17 @@ def connect_sw():
     return win32com.client.dynamic.Dispatch(sw)
 
 
+def reconnect_sw() -> object | None:
+    """Retry connect a few times; return None when SolidWorks is truly down."""
+    for attempt in range(3):
+        try:
+            return connect_sw()
+        except Exception as exc:
+            logger.warning("reconnect attempt %d failed: %s", attempt + 1, exc)
+            time.sleep(3)
+    return None
+
+
 def scan_part_configs(sw, part_path: str) -> list[str]:
     """Open a part silently, read-only, and return size configuration names."""
     import pythoncom
@@ -107,7 +118,10 @@ def scan_sizes(catalog: list[dict], cache_path: Path,
     Returns (cache, completed_count). On persistent COM failure it stops with
     partial results instead of losing the whole run.
     """
-    sw = connect_sw()
+    sw = reconnect_sw()
+    if sw is None:
+        logger.error("cannot connect to SolidWorks; scan skipped")
+        return {}, 0
 
     cache: dict[str, list[str]] = {}
     if os.path.exists(cache_path):
@@ -130,13 +144,14 @@ def scan_sizes(catalog: list[dict], cache_path: Path,
                     configs = scan_part_configs(sw, row["path"])
                     break
                 except ComDied:
-                    logger.warning("COM lost at %s; reconnecting (attempt %d)",
+                    logger.warning("COM lost at %s; reconnect attempt %d",
                                    row["rel"], attempt + 1)
-                    time.sleep(2)
-                    sw = connect_sw()
+                    sw = reconnect_sw()
+                    if sw is None:
+                        break
             if configs is None:
-                logger.error("SolidWorks COM unavailable; scan stopped at %d/%d",
-                             i, len(todo))
+                logger.error("SolidWorks unavailable at %s; scan stopped at %d/%d",
+                             row["rel"], i, len(todo))
                 break
             cache[row["rel"]] = configs
             fh.write(f"{row['rel']}\t{json.dumps(configs)}\n")
@@ -238,7 +253,19 @@ def main(argv: list[str] | None = None) -> int:
                          if r["standard_folder"].casefold() in wanted]
             logger.info("size scan limited to %d rows", len(scan_rows))
         scan_requested_total = len(scan_rows)
-        sizes, scan_completed = scan_sizes(scan_rows, cache_file)
+        try:
+            sizes, scan_completed = scan_sizes(scan_rows, cache_file)
+        except Exception as exc:  # never lose the partial cache/journal
+            logger.error("size scan aborted: %s", exc)
+            scan_completed = -1
+        # sizes.json always rebuilt from the cache journal (source of truth)
+        if os.path.exists(cache_file):
+            with open(cache_file, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        rel, cfg = line.split("\t", 1)
+                        sizes[rel] = json.loads(cfg)
         (out / "sizes.json").write_text(
             json.dumps(sizes, indent=2, ensure_ascii=False), encoding="utf-8")
 

@@ -132,7 +132,11 @@ in scope. Research + groundwork done 2026-09-23:
 
 Expected state on this machine: `index.json` = 2404 parts in 19 standards
 (ISO 280, DIN 468, ANSI_Metric 148, SKF 20, UNISTRUT 204 ...). Size scan for
-ISO/DIN/Ansi Metric/SKF was running.
+ISO/DIN/Ansi Metric/SKF **done**: 916/916 scanned, 70 parts carry materialised
+size configurations (e.g. `ISO 4762 M10 x 16 - 16N`, `DIN 912 M20x1.5 x 30 --- 30N`);
+70 sized masters copied to `source/` (portable bundle). SolidWorks crashed twice
+during the long COM scan; the script now reconnects and stops gracefully with a
+partial journal (`sizes.cache.tsv`), so re-runs resume.
 
 Next recommended slice (plan order): MCP tools `list_standard_parts`,
 `get_standard_part_sizes`, `insert_standard_part` (reusing `insert_component`)
