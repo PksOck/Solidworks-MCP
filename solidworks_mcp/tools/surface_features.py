@@ -668,3 +668,66 @@ def loft_surface(sw, profile_sketches: list[str]) -> dict:
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="sweep_surface",
+    description="Sweep a 2D profile along a separate path sketch into an open sheet.",
+    schema={"type": "object", "properties": {
+        "profile_sketch": {"type": "string", "minLength": 1},
+        "path_sketch": {"type": "string", "minLength": 1},
+    }, "required": ["profile_sketch", "path_sketch"]},
+    operation_class=OperationClass.MUTATE,
+)
+def sweep_surface(sw, profile_sketch: str, path_sketch: str) -> dict:
+    if (not isinstance(profile_sketch, str) or not profile_sketch.strip()
+            or not isinstance(path_sketch, str) or not path_sketch.strip()
+            or profile_sketch == path_sketch):
+        return sw._result(False, "Supply distinct profile and path sketches.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Surface sweep requires a part.", SwErrors.swInvalidFileType)
+    profile = _find_feature(document, profile_sketch)
+    path = _find_feature(document, path_sketch)
+    if any(feature is None or com(feature, "GetTypeName2") != "ProfileFeature"
+           for feature in (profile, path)):
+        return sw._result(False, "Profile or path sketch not found.",
+                          SwErrors.swSelectionError)
+    try:
+        sheets_before = com(document, "GetBodies2", 1, True) or []
+        before, retained = _feature_signatures(document)
+        del retained
+        com(document, "ClearSelection2", True)
+        if not com(profile, "Select2", False, 1) or not com(path, "Select2", True, 4):
+            return sw._result(False, "Could not select sweep profile or path.",
+                              SwErrors.swSelectionError)
+        # SW2025 IModelDoc2.InsertSweepRefSurface(Propagate,TwistCtrlOption,
+        # KeepTangency,ForceNonRational) returns void.
+        com(document, "InsertSweepRefSurface", False, 0, False, False)
+        after, retained = _feature_signatures(document)
+        del retained
+        created = [name for name, kind in after if (name, kind) not in before
+                   and kind == "SweepRefSurface"]
+        feature = _find_feature(document, created[-1]) if created else None
+        sheets_after = com(document, "GetBodies2", 1, True) or []
+        area = sum(com(face, "GetArea") * 1e6 for body in sheets_after
+                   for face in (com(body, "GetFaces") or []))
+        if (feature is None or len(sheets_after) <= len(sheets_before) or area <= 0
+                or com(feature, "GetErrorCode")):
+            return sw._result(False, "Surface sweep did not create a valid sheet.",
+                              SwErrors.swFeatureError, {"sheets_before": len(sheets_before),
+                                                       "sheets_after": len(sheets_after),
+                                                       "area_after_mm2": area})
+        return sw._result(True, f"Created surface sweep {created[-1]}.", data={
+            "feature_name": created[-1], "profile_sketch": profile_sketch,
+            "path_sketch": path_sketch, "sheets_after": len(sheets_after),
+            "area_after_mm2": area,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Surface sweep failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)

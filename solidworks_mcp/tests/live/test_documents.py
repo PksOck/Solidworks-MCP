@@ -40,7 +40,7 @@ from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.appearance import set_appearance
 from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.body_features import combine_bodies, delete_body, move_copy_body, scale_body
-from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, knit_surface, loft_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, thicken_surface
+from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, knit_surface, loft_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, sweep_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
 
@@ -1334,6 +1334,32 @@ class LiveDocumentTargetTests(unittest.TestCase):
         saved = save_document(self.automation, path=str(part_path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(part_path.stat().st_size, 0)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_sweep_surface_circle_along_line_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_sweep_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_circle(0, 0, 2, "mm")["success"])
+        self._close_sketch()
+        self.assertTrue(self.automation.create_sketch("Top", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_line(0, 0, 0, 50, "mm")["success"])
+        self._close_sketch()
+        profile_name, path_name = self._sketch_names()
+        result = sweep_surface(self.automation, profile_name, path_name)
+        self.assertTrue(result["success"], f'{result["message"]}; {result.get("data")}; {self._top_level_feature_types()}')
+        self.assertAlmostEqual(200 * math.pi, result["data"]["area_after_mm2"], delta=1)
+        self.assertAlmostEqual(0, self._total_volume_mm3(), delta=0.01)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
         title = str(com(part, "GetTitle"))
         self.created_titles.append(title)
         self.automation.app.CloseDoc(title)
