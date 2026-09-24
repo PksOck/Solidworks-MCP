@@ -465,3 +465,76 @@ def cut_with_surface(sw, surface_name: str, flip: bool = False) -> dict:
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="extend_surface",
+    description="Linearly extend one edge of a sheet surface by a given distance.",
+    schema={"type": "object", "properties": {
+        "sheet_index": {"type": "integer", "minimum": 0},
+        "edge_index": {"type": "integer", "minimum": 0},
+        "distance": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                 "default": "mm"},
+    }, "required": ["sheet_index", "edge_index", "distance"]},
+    operation_class=OperationClass.MUTATE,
+)
+def extend_surface(sw, sheet_index: int, edge_index: int, distance: float,
+                   unit: str = "mm") -> dict:
+    if (isinstance(sheet_index, bool) or not isinstance(sheet_index, int)
+            or sheet_index < 0 or isinstance(edge_index, bool)
+            or not isinstance(edge_index, int) or edge_index < 0
+            or isinstance(distance, bool) or not isinstance(distance, (int, float))
+            or not math.isfinite(distance) or distance <= 0):
+        return sw._result(False, "Invalid sheet, edge or distance.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    try:
+        distance_m = sw._units.to_meters(distance, unit)
+    except (KeyError, ValueError, TypeError) as conversion_error:
+        return sw._result(False, f"Invalid extension unit: {conversion_error}",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Extend surface requires a part.",
+                          SwErrors.swInvalidFileType)
+    try:
+        sheets = com(document, "GetBodies2", 1, True) or []
+        if sheet_index >= len(sheets):
+            return sw._result(False, "Sheet body index out of range.",
+                              SwErrors.swInvalidInput)
+        edges = com(sheets[sheet_index], "GetEdges") or []
+        if edge_index >= len(edges):
+            return sw._result(False, "Sheet edge index out of range.",
+                              SwErrors.swInvalidInput)
+        before, proxies = _feature_signatures(document)
+        del proxies
+        com(document, "ClearSelection2", True)
+        selection = com(com(document, "SelectionManager"), "CreateSelectData")
+        selection.Mark = 0
+        if not com(edges[edge_index], "Select4", False, selection):
+            return sw._result(False, "Could not select sheet edge.",
+                              SwErrors.swSelectionError)
+        # SW2025 IModelDoc2.InsertExtendSurface(ExtendLinear,EndCondition,Distance)
+        com(document, "InsertExtendSurface", True, 0, distance_m)
+        after, proxies = _feature_signatures(document)
+        del proxies
+        created = [name for name, kind in after if (name, kind) not in before
+                   and kind == "ExtendRefSurface"]
+        if not created:
+            return sw._result(False, "SolidWorks did not extend the surface.",
+                              SwErrors.swFeatureError)
+        feature = _find_feature(document, created[-1])
+        if com(feature, "GetErrorCode"):
+            return sw._result(False, "Extended surface failed to rebuild.",
+                              SwErrors.swFeatureError)
+        return sw._result(True, f"Extended surface {created[-1]}.", data={
+            "feature_name": created[-1], "sheet_index": sheet_index,
+            "edge_index": edge_index, "distance": distance, "unit": unit,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Extend surface failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)

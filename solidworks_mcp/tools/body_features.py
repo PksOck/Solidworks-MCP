@@ -62,3 +62,61 @@ def scale_body(sw, body_index: int, factor: float, origin: str = "centroid") -> 
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="delete_body",
+    description="Delete a selected solid body or keep only that body in a multibody part.",
+    schema={"type": "object", "properties": {
+        "body_index": {"type": "integer", "minimum": 0},
+        "keep_only": {"type": "boolean", "default": False},
+    }, "required": ["body_index"]},
+    operation_class=OperationClass.MUTATE,
+)
+def delete_body(sw, body_index: int, keep_only: bool = False) -> dict:
+    if (isinstance(body_index, bool) or not isinstance(body_index, int)
+            or body_index < 0 or not isinstance(keep_only, bool)):
+        return sw._result(False, "Invalid body index or keep_only flag.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Delete/Keep Body requires a part.",
+                          SwErrors.swInvalidFileType)
+    try:
+        bodies = com(document, "GetBodies2", 0, True) or []
+        if len(bodies) < 2 or body_index >= len(bodies):
+            return sw._result(False, "Select a body in a multibody part.",
+                              SwErrors.swInvalidInput, {"code": "BODY_NOT_FOUND"})
+        before_count = len(bodies)
+        before_volume = sum(float(com(body, "GetMassProperties", 0.0)[3]) * 1e9
+                            for body in bodies)
+        com(document, "ClearSelection2", True)
+        selection = com(com(document, "SelectionManager"), "CreateSelectData")
+        if not com(bodies[body_index], "Select2", False, selection):
+            return sw._result(False, "Could not select solid body.",
+                              SwErrors.swSelectionError)
+        # SW2025 IFeatureManager.InsertDeleteBody2(KeepBodies)
+        feature = com(com(document, "FeatureManager"), "InsertDeleteBody2", keep_only)
+        remaining = com(document, "GetBodies2", 0, True) or []
+        after_volume = sum(float(com(body, "GetMassProperties", 0.0)[3]) * 1e9
+                           for body in remaining)
+        expected_count = 1 if keep_only else before_count - 1
+        if feature is None or len(remaining) != expected_count or after_volume >= before_volume:
+            return sw._result(False, "Delete/Keep Body did not remove expected geometry.",
+                              SwErrors.swFeatureError,
+                              {"bodies_before": before_count, "bodies_after": len(remaining),
+                               "volume_before_mm3": before_volume,
+                               "volume_after_mm3": after_volume})
+        return sw._result(True, f"Created Delete/Keep Body {com(feature, 'Name')}.", data={
+            "feature_name": str(com(feature, "Name")), "keep_only": keep_only,
+            "body_index": body_index, "bodies_before": before_count,
+            "bodies_after": len(remaining), "volume_before_mm3": before_volume,
+            "volume_after_mm3": after_volume,
+        })
+    except Exception as exc:
+        return sw._result(False, f"Delete/Keep Body failed: {exc}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
