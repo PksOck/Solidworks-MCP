@@ -120,3 +120,84 @@ def delete_body(sw, body_index: int, keep_only: bool = False) -> dict:
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="move_copy_body",
+    description="Translate one solid body by an XYZ vector; optionally retain the original as a copy.",
+    schema={"type": "object", "properties": {
+        "body_index": {"type": "integer", "minimum": 0},
+        "dx": {"type": "number"}, "dy": {"type": "number"},
+        "dz": {"type": "number"},
+        "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
+        "copy": {"type": "boolean", "default": False},
+    }, "required": ["body_index", "dx", "dy", "dz"]},
+    operation_class=OperationClass.MUTATE,
+)
+def move_copy_body(sw, body_index: int, dx: float, dy: float, dz: float,
+                   unit: str = "mm", copy: bool = False) -> dict:
+    coords = (dx, dy, dz)
+    if (isinstance(body_index, bool) or not isinstance(body_index, int)
+            or body_index < 0 or not isinstance(copy, bool)
+            or any(isinstance(n, bool) or not isinstance(n, (int, float))
+                   or not math.isfinite(n) for n in coords)
+            or not any(coords)):
+        return sw._result(False, "Invalid body index or translation vector.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    try:
+        xyz = [sw._units.to_meters(n, unit) for n in coords]
+    except (KeyError, ValueError, TypeError) as conversion_error:
+        return sw._result(False, f"Invalid translation unit: {conversion_error}",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Move/Copy Body requires a part.", SwErrors.swInvalidFileType)
+    try:
+        bodies = com(document, "GetBodies2", 0, True) or []
+        if body_index >= len(bodies):
+            return sw._result(False, "Solid body index out of range.",
+                              SwErrors.swInvalidInput)
+        original = bodies[body_index]
+        before_box = tuple(com(original, "GetBodyBox"))
+        selected_volume = com(original, "GetMassProperties", 0.0)[3] * 1e9
+        before_volume = sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                            for body in bodies)
+        com(document, "ClearSelection2", True)
+        select_data = com(com(document, "SelectionManager"), "CreateSelectData")
+        select_data.Mark = 1
+        if not com(original, "Select2", False, select_data):
+            return sw._result(False, "Could not select solid body.", SwErrors.swSelectionError)
+        # TransX/Y/Z are displacement in meters; TransDist is zero when the
+        # displacement components are supplied directly (SW 2025 VBA example).
+        args = (*xyz, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, copy, 1)
+        feature = com(com(document, "FeatureManager"), "InsertMoveCopyBody2", *args)
+        after = com(document, "GetBodies2", 0, True) or []
+        after_volume = sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                           for body in after)
+        count_ok = len(after) == len(bodies) + int(copy)
+        expected_volume = before_volume + (selected_volume if copy else 0)
+        volume_ok = abs(after_volume - expected_volume) < max(0.5, expected_volume * 1e-4)
+        expected_box = tuple(before_box[i] + xyz[i % 3] for i in range(6))
+        candidates = [tuple(com(body, "GetBodyBox")) for body in after]
+        moved_box = min(candidates, key=lambda box: sum(abs(a - b) for a, b in zip(box, expected_box))) if candidates else ()
+        shifted = moved_box and all(abs(a - b) < 1e-4 for a, b in zip(moved_box, expected_box))
+        if feature is None or not count_ok or not volume_ok or not shifted:
+            return sw._result(False, "Move/Copy Body did not change geometry as expected.",
+                              SwErrors.swFeatureError, {"bodies_after": len(after),
+                                                       "volume_after_mm3": after_volume,
+                                                       "box_before_m": before_box,
+                                                       "box_after_m": moved_box,
+                                                       "feature_created": feature is not None})
+        return sw._result(True, f"Created {com(feature, 'Name')}.", data={
+            "feature_name": str(com(feature, "Name")), "body_index": body_index,
+            "copy": copy, "translation_m": xyz, "bodies_before": len(bodies),
+            "bodies_after": len(after), "volume_before_mm3": before_volume,
+            "volume_after_mm3": after_volume, "box_before_m": before_box,
+            "box_after_m": moved_box,
+        })
+    except Exception as exc:
+        return sw._result(False, f"Move/Copy Body failed: {exc}", SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
