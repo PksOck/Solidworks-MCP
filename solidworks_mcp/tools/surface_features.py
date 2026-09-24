@@ -538,3 +538,70 @@ def extend_surface(sw, sheet_index: int, edge_index: int, distance: float,
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="ruled_surface",
+    description="Create a tangent ruled sheet from one selected sheet-body edge.",
+    schema={"type": "object", "properties": {
+        "sheet_index": {"type": "integer", "minimum": 0},
+        "edge_index": {"type": "integer", "minimum": 0},
+        "length": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
+    }, "required": ["sheet_index", "edge_index", "length"]},
+    operation_class=OperationClass.MUTATE,
+)
+def ruled_surface(sw, sheet_index: int, edge_index: int, length: float,
+                  unit: str = "mm") -> dict:
+    if (isinstance(sheet_index, bool) or not isinstance(sheet_index, int)
+            or sheet_index < 0 or isinstance(edge_index, bool)
+            or not isinstance(edge_index, int) or edge_index < 0
+            or isinstance(length, bool) or not isinstance(length, (int, float))
+            or not math.isfinite(length) or length <= 0):
+        return sw._result(False, "Invalid sheet, edge or ruled length.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    try:
+        length_m = sw._units.to_meters(length, unit)
+    except (KeyError, ValueError, TypeError) as conversion_error:
+        return sw._result(False, f"Invalid ruled-surface unit: {conversion_error}",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Ruled surface requires a part.",
+                          SwErrors.swInvalidFileType)
+    try:
+        sheets = com(document, "GetBodies2", 1, True) or []
+        if sheet_index >= len(sheets):
+            return sw._result(False, "Sheet body index out of range.", SwErrors.swInvalidInput)
+        edges = com(sheets[sheet_index], "GetEdges") or []
+        if edge_index >= len(edges):
+            return sw._result(False, "Sheet edge index out of range.", SwErrors.swInvalidInput)
+        area_before = sum(com(face, "GetArea") * 1e6 for body in sheets
+                          for face in (com(body, "GetFaces") or []))
+        com(document, "ClearSelection2", True)
+        select_data = com(com(document, "SelectionManager"), "CreateSelectData")
+        select_data.Mark = 4  # Default adjacent face (SW2025 API Help).
+        if not com(edges[edge_index], "Select4", False, select_data):
+            return sw._result(False, "Could not select ruled edge.", SwErrors.swSelectionError)
+        feature = com(com(document, "FeatureManager"), "InsertRuledSurfaceFromEdge2",
+                      0, length_m, False, False, False, 0.0, False,
+                      0.0, 0.0, 0.0, False)
+        after = com(document, "GetBodies2", 1, True) or []
+        area_after = sum(com(face, "GetArea") * 1e6 for body in after
+                         for face in (com(body, "GetFaces") or []))
+        if feature is None or area_after <= area_before + 1e-3:
+            return sw._result(False, "Ruled surface did not add sheet area.",
+                              SwErrors.swFeatureError, {"area_before_mm2": area_before,
+                                                       "area_after_mm2": area_after})
+        return sw._result(True, f"Created ruled surface {com(feature, 'Name')}.", data={
+            "feature_name": str(com(feature, "Name")), "sheet_index": sheet_index,
+            "edge_index": edge_index, "area_before_mm2": area_before,
+            "area_after_mm2": area_after,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Ruled surface failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)

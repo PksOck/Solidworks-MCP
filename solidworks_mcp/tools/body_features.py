@@ -6,6 +6,8 @@ swScaleAboutCentroid=0, swScaleAboutOrigin=1 (swconst.tlb).
 """
 
 import math
+import pythoncom
+from win32com.client import VARIANT
 
 from ..comutil import com
 from ..constants import SwErrors
@@ -199,5 +201,69 @@ def move_copy_body(sw, body_index: int, dx: float, dy: float, dz: float,
         })
     except Exception as exc:
         return sw._result(False, f"Move/Copy Body failed: {exc}", SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="combine_bodies",
+    description="Combine two overlapping solid bodies: add, subtract (target minus tool), or common.",
+    schema={"type": "object", "properties": {
+        "target_index": {"type": "integer", "minimum": 0},
+        "tool_index": {"type": "integer", "minimum": 0},
+        "operation": {"type": "string", "enum": ["add", "subtract", "common"]},
+    }, "required": ["target_index", "tool_index", "operation"]},
+    operation_class=OperationClass.MUTATE,
+)
+def combine_bodies(sw, target_index: int, tool_index: int, operation: str) -> dict:
+    if (any(isinstance(index, bool) or not isinstance(index, int) or index < 0
+            for index in (target_index, tool_index)) or target_index == tool_index
+            or operation not in ("add", "subtract", "common")):
+        return sw._result(False, "Choose two distinct solid bodies and a valid operation.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Combine requires a multibody part.",
+                          SwErrors.swInvalidFileType)
+    try:
+        bodies = com(document, "GetBodies2", 0, True) or []
+        if len(bodies) != 2 or max(target_index, tool_index) >= len(bodies):
+            return sw._result(False, "Combine requires exactly two solid bodies with valid indices.",
+                              SwErrors.swInvalidInput)
+        target, tool_body = bodies[target_index], bodies[tool_index]
+        target_volume = com(target, "GetMassProperties", 0.0)[3] * 1e9
+        tool_volume = com(tool_body, "GetMassProperties", 0.0)[3] * 1e9
+        before_volume = sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                            for body in bodies)
+        # SW2025 swBodyOperationType_e: add=15903, cut=15902, intersect=15901.
+        body_array = VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH,
+                             [tool_body] if operation == "subtract" else [target, tool_body])
+        main = target if operation == "subtract" else VARIANT(pythoncom.VT_DISPATCH, None)
+        com(document, "ClearSelection2", True)
+        feature = com(com(document, "FeatureManager"), "InsertCombineFeature",
+                      {"add": 15903, "subtract": 15902, "common": 15901}[operation],
+                      main, body_array)
+        after = com(document, "GetBodies2", 0, True) or []
+        after_volume = sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                           for body in after)
+        count_ok = len(after) == len(bodies) - 1
+        volume_ok = (0 < after_volume < target_volume - 1e-3
+                     if operation == "subtract" else 0 < after_volume < before_volume - 1e-3)
+        if feature is None or not count_ok or not volume_ok or com(feature, "GetErrorCode"):
+            return sw._result(False, "Combine did not produce the expected solid.",
+                              SwErrors.swFeatureError, {"bodies_before": len(bodies),
+                                                       "bodies_after": len(after),
+                                                       "volume_before_mm3": before_volume,
+                                                       "volume_after_mm3": after_volume})
+        return sw._result(True, f"Created combine feature {com(feature, 'Name')}.", data={
+            "feature_name": str(com(feature, "Name")), "operation": operation,
+            "bodies_before": len(bodies), "bodies_after": len(after),
+            "target_volume_mm3": target_volume, "tool_volume_mm3": tool_volume,
+            "volume_before_mm3": before_volume, "volume_after_mm3": after_volume,
+        })
+    except Exception as exc:
+        return sw._result(False, f"Combine failed: {exc}", SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
