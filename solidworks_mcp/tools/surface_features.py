@@ -403,3 +403,65 @@ def knit_surface(sw, surface_names: list[str], merge_entities: bool = True) -> d
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="cut_with_surface",
+    description="Remove one side of a solid using a named planar sheet surface.",
+    schema={"type": "object", "properties": {
+        "surface_name": {"type": "string", "minLength": 1},
+        "flip": {"type": "boolean", "default": False},
+    }, "required": ["surface_name"]},
+    operation_class=OperationClass.MUTATE,
+)
+def cut_with_surface(sw, surface_name: str, flip: bool = False) -> dict:
+    if (not isinstance(surface_name, str) or not surface_name.strip()
+            or not isinstance(flip, bool)):
+        return sw._result(False, "Invalid surface name or direction.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Cut with surface requires a part.",
+                          SwErrors.swInvalidFileType)
+    surface = _find_feature(document, surface_name)
+    if surface is None or com(surface, "GetTypeName2") != "PlanarSurface":
+        return sw._result(False, f"Planar surface not found: {surface_name}",
+                          SwErrors.swSelectionError)
+    try:
+        volume_before = _solid_volume_mm3(document)
+        if volume_before <= 0:
+            return sw._result(False, "No solid body to cut.", SwErrors.swSelectionError)
+        before, proxies = _feature_signatures(document)
+        del proxies
+        com(document, "ClearSelection2", True)
+        if not com(surface, "Select2", False, 0):
+            return sw._result(False, "Could not select cutting surface.",
+                              SwErrors.swSelectionError)
+        # SW2025 IModelDoc2.InsertCutSurface(Flip, KeepPieceIndex);
+        # -1 means no ambiguity about the retained side.
+        com(document, "InsertCutSurface", flip, -1)
+        after, proxies = _feature_signatures(document)
+        del proxies
+        created = [name for name, kind in after if (name, kind) not in before
+                   and kind == "SurfCut"]
+        volume_after = _solid_volume_mm3(document)
+        if not created or not 0 < volume_after < volume_before - 1e-6:
+            return sw._result(False, "Surface cut did not remove solid volume.",
+                              SwErrors.swFeatureError, {"volume_before_mm3": volume_before,
+                                                       "volume_after_mm3": volume_after})
+        feature = _find_feature(document, created[-1])
+        if com(feature, "GetErrorCode"):
+            return sw._result(False, "Surface cut failed to rebuild.",
+                              SwErrors.swFeatureError)
+        return sw._result(True, f"Created surface cut {created[-1]}.", data={
+            "feature_name": created[-1], "surface_name": surface_name,
+            "flip": flip, "volume_before_mm3": volume_before,
+            "volume_after_mm3": volume_after,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Surface cut failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)

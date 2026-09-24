@@ -38,7 +38,7 @@ from solidworks_mcp.tools.reference_geometry import create_reference_axis, creat
 from solidworks_mcp.tools.properties import set_custom_property
 from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.body_features import scale_body
-from solidworks_mcp.tools.surface_features import extrude_surface, knit_surface, offset_surface, planar_surface, revolve_surface, thicken_surface
+from solidworks_mcp.tools.surface_features import cut_with_surface, extrude_surface, knit_surface, offset_surface, planar_surface, revolve_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
 
@@ -1038,6 +1038,38 @@ class LiveDocumentTargetTests(unittest.TestCase):
         area_mm2 = sum(com(face, "GetArea") * 1e6 for body in sheets_after
                        for face in (com(body, "GetFaces") or []))
         self.assertAlmostEqual(1600, area_mm2, delta=0.5)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_cut_with_planar_surface_halves_box_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_surface_cut_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        result = self.automation.extrude_sketch(10, False, "mm")
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(16000, self._total_volume_mm3(), delta=0.1)
+        plane = create_reference_plane(self.automation, "Front Plane", 5, "mm")
+        self.assertTrue(plane["success"], plane["message"])
+        self._sketch_on_plane("Plane1")
+        self.assertTrue(self.automation.draw_rectangle(-30, -30, 30, 30, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        planar = planar_surface(self.automation, self._last_sketch_name(part))
+        self.assertTrue(planar["success"], planar["message"])
+        result = cut_with_surface(self.automation, planar["data"]["feature_name"])
+        self.assertTrue(result["success"], f'{result["message"]}; features={self._top_level_feature_types()}')
+        self.assertAlmostEqual(8000, self._total_volume_mm3(), delta=0.5)
         saved = save_document(self.automation, path=str(part_path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(part_path.stat().st_size, 0)
