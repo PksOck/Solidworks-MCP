@@ -14,6 +14,9 @@ SW_DOC_DRAWING = 3
 # swInsertAnnotation_e.swInsertDimensionsMarkedForDrawing (swconst.tlb).
 SW_INSERT_DIMENSIONS_MARKED_FOR_DRAWING = 32768
 
+# swImportModelItemsSource_e.swImportModelItemsFromEntireModel (swconst.tlb).
+SW_IMPORT_MODEL_ITEMS_FROM_ENTIRE_MODEL = 0
+
 # swBalloonLayoutType_e.swDetailingBalloonLayout_Square-ish default used by the UI.
 DEFAULT_BALLOON_LAYOUT = 1
 
@@ -94,8 +97,16 @@ def insert_marked_dimensions(sw, view_name: str) -> dict:
         if not _select_view(document, view_name):
             return sw._result(False, f"Could not select drawing view: {view_name}",
                               SwErrors.swSelectionError)
-        inserted = com(document, "InsertModelDimensions",
-                       SW_INSERT_DIMENSIONS_MARKED_FOR_DRAWING)
+        # IDrawingDoc.InsertModelAnnotations4(Option, Types, AllViews,
+        # DuplicateDims, HiddenFeatureDims, UsePlacementInSketch,
+        # InsertAllAnnotations, InsertAllReferenceGeometry). Types filters the
+        # import to swInsertAnnotation_e.swInsertDimensionsMarkedForDrawing; the
+        # older InsertModelDimensions takes only 0..3 and cannot filter, so it
+        # imports every dimension regardless of the mark.
+        inserted = com(document, "InsertModelAnnotations4",
+                       SW_IMPORT_MODEL_ITEMS_FROM_ENTIRE_MODEL,
+                       SW_INSERT_DIMENSIONS_MARKED_FOR_DRAWING,
+                       False, True, False, False, False, False)
     except Exception as insert_error:
         return sw._result(False, f"Inserting marked dimensions failed: {insert_error}",
                           SwErrors.swUnknownError)
@@ -104,8 +115,14 @@ def insert_marked_dimensions(sw, view_name: str) -> dict:
 
     after = com(view, "GetDimensionCount2")
     imported = after - before if isinstance(after, int) and isinstance(before, int) else None
+    if isinstance(inserted, (list, tuple)):
+        imported_annotations = len(inserted)
+    elif inserted is None:
+        imported_annotations = 0
+    else:
+        imported_annotations = 1
 
-    if imported is not None and imported <= 0 and not inserted:
+    if imported_annotations <= 0 and (imported is None or imported <= 0):
         return sw._result(
             False,
             f"No dimensions marked 'Mark for Drawing' were imported into "
@@ -117,13 +134,14 @@ def insert_marked_dimensions(sw, view_name: str) -> dict:
 
     return sw._result(
         True,
-        f"Imported {imported if imported is not None else 'marked'} dimension(s) "
-        f"into '{view_name}'.",
+        f"Imported {imported if imported is not None else imported_annotations} "
+        f"dimension(s) into '{view_name}'.",
         data={
             "view_name": view_name,
             "dimensions_before": before,
             "dimensions_after": after,
             "imported": imported,
+            "inserted_annotations": imported_annotations,
         },
     )
 

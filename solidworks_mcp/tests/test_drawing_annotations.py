@@ -80,11 +80,15 @@ class Document:
         self.clear_calls.append(clear_all)
         return True
 
-    def InsertModelDimensions(self, option):
-        self.insert_calls.append(option)
+    def InsertModelAnnotations4(self, option, types, all_views, duplicate_dims,
+                                hidden_dims, use_placement, all_annotations,
+                                all_reference_geometry):
+        self.insert_calls.append((option, types, all_views, duplicate_dims,
+                                  hidden_dims, use_placement, all_annotations,
+                                  all_reference_geometry))
         if self.inserted and self.import_dimensions:
             self.target.dimension_count += self.import_dimensions
-        return self.inserted
+        return ["annotation"] * self.import_dimensions if self.inserted else []
 
     def CreateAutoBalloonOptions(self):
         return BalloonOptions()
@@ -138,7 +142,14 @@ class InsertMarkedDimensionsTests(unittest.TestCase):
             [("Drawing View1", "DRAWINGVIEW", False)],
             automation.document.Extension.select_calls,
         )
-        self.assertEqual([32768], automation.document.insert_calls)
+        # InsertModelAnnotations4(Option, Types, ...) with Types = 32768
+        # (swInsertDimensionsMarkedForDrawing); the old InsertModelDimensions
+        # took only 0..3 and could not filter.
+        self.assertEqual(
+            [(0, 32768, False, True, False, False, False, False)],
+            automation.document.insert_calls,
+        )
+        self.assertEqual(1, result["data"]["inserted_annotations"])
         self.assertEqual(1, result["data"]["imported"])
 
     def test_unknown_view_is_rejected(self):

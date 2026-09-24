@@ -420,6 +420,33 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertTrue(extrusion["success"], extrusion["message"])
         return part_title
 
+    def _new_saved_part_with_extrusion(self, stem):
+        """A rectangle + extrusion saved to the approved output root.
+
+        A drawing view needs a referenced document that exists on disk;
+        SolidWorks reports success from Create3rdAngleViews2 but creates no
+        view for an unsaved part, so the part must be saved first.
+        """
+        self._new_part_with_extrusion()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        path = (Path(self.automation._path_policy.output_roots[0]) / "saved" /
+                f"{stem}_{uuid4().hex}.SLDPRT")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        saved = save_document(self.automation, path=str(path))
+        self.assertTrue(saved["success"], saved["message"])
+        title = str(com(part, "GetTitle"))
+        return title
+
+    def _close_saved_part_test(self, drawing_title, part_title):
+        # The saved part is kept as an output artifact, like the other live
+        # tests; only the open windows are closed here. Close the drawing first
+        # because it references the part.
+        self.automation.app.CloseDoc(drawing_title)
+        self.created_titles = [item for item in self.created_titles
+                               if item not in (drawing_title, part_title)]
+        self.automation.app.CloseDoc(part_title)
+
     def test_assembly_insert_components_and_mate_without_saving(self):
         path_a = self._new_saved_cylinder(10.0, 20.0, "mcp_live_asm_a.SLDPRT")
         path_b = self._new_saved_cylinder(6.0, 20.0, "mcp_live_asm_b.SLDPRT")
@@ -731,8 +758,8 @@ class LiveDocumentTargetTests(unittest.TestCase):
         )
 
     def test_auto_balloon_scratch_drawing_view_without_saving(self):
-        part_title = self._new_part_with_extrusion()
-        self._new_drawing("A4")
+        part_title = self._new_saved_part_with_extrusion("mcp_live_balloon_part")
+        drawing_title = self._new_drawing("A4")
         document, error = self.automation.get_active_doc()
         self.assertIsNone(error)
         created = com(document, "Create3rdAngleViews2", part_title)
@@ -747,10 +774,11 @@ class LiveDocumentTargetTests(unittest.TestCase):
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
+        self._close_saved_part_test(drawing_title, part_title)
 
     def test_insert_marked_dimensions_imports_nothing_when_none_marked_without_saving(self):
-        part_title = self._new_part_with_extrusion()
-        self._new_drawing("A4")
+        part_title = self._new_saved_part_with_extrusion("mcp_live_marked_part")
+        drawing_title = self._new_drawing("A4")
         document, error = self.automation.get_active_doc()
         self.assertIsNone(error)
         created = com(document, "Create3rdAngleViews2", part_title)
@@ -766,6 +794,7 @@ class LiveDocumentTargetTests(unittest.TestCase):
         active, error = self.automation.capture_active_document_ref()
         self.assertIsNone(error)
         self.assertIsNone(active.path)
+        self._close_saved_part_test(drawing_title, part_title)
 
     def test_sweep_scratch_profile_along_path_without_saving(self):
         self._new_part()
