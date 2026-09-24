@@ -11,8 +11,9 @@ from unittest.mock import patch
 from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.simulation import (
-    apply_fixed_fixture, apply_force_load, create_static_study,
-    get_stress_results, run_analysis,
+    apply_fixed_fixture, apply_force_load, apply_pressure_load,
+    create_static_study, get_displacement_results, get_stress_results,
+    run_analysis,
 )
 
 FACE_LOOKUP = "solidworks_mcp.tools.simulation._get_planar_face_by_index"
@@ -101,6 +102,10 @@ class FakeLbcManager:
         self.force_error = 0
         self.force_value = None
         self.force_edit_error = 0
+        self.pressure_error = 0
+        self.pressure_value = None
+        self.pressure_edit_error = 0
+        self.pressure_unit_index = 0
 
     @property
     def Count(self):
@@ -123,6 +128,16 @@ class FakeLbcManager:
         force.ForceType = force_type
         self._items.append(force)
         return force
+
+    def AddPressure(self, pressure_type, entities, reference, errors):
+        errors.value = self.pressure_error
+        if self.pressure_error:
+            return None
+        pressure = FakePressure(self.pressure_value, self.pressure_unit_index)
+        pressure.pressure_edit_error = self.pressure_edit_error
+        pressure.PressureType = pressure_type
+        self._items.append(pressure)
+        return pressure
 
 
 class FakeRestraint:
@@ -155,12 +170,44 @@ class FakeForce:
         return self.force_edit_error
 
 
+class FakePressure:
+    """``stored`` models the add-in ignoring the value we set.
+
+    ``unit_index`` mirrors the unit the load reports: the real add-in keeps its
+    own strength unit and ignores writes to ``Unit`` inside the edit block.
+    """
+
+    def __init__(self, stored=None, unit_index=0):
+        self._stored = stored
+        self._value = stored if stored is not None else 0.0
+        self.PressureType = 0
+        self.Unit = unit_index
+        self.pressure_edit_error = 0
+
+    @property
+    def Value(self):
+        return self._value
+
+    @Value.setter
+    def Value(self, value):
+        if self._stored is None:
+            self._value = value
+
+    def PressureBeginEdit(self):
+        return None
+
+    def PressureEndEdit(self):
+        return self.pressure_edit_error
+
+
 class FakeResults:
     def __init__(self):
         self.available_steps = 1
         self.values = [7, -1.25, 91, 33.5]
+        self.displacement_values = [12, 0.0, 345, 1.842]
         self.error = 0
         self.calls = []
+        self.displacement_calls = []
 
     def GetMaximumAvailableSteps(self):
         return self.available_steps
@@ -169,6 +216,11 @@ class FakeResults:
         self.calls.append((component, element, step, plane, units))
         errors.value = self.error
         return type(self.values)(self.values)
+
+    def GetMinMaxDisplacement(self, component, step, plane, units, errors):
+        self.displacement_calls.append((component, step, plane, units))
+        errors.value = self.error
+        return type(self.displacement_values)(self.displacement_values)
 
 
 class FakeStudyManager:
@@ -303,12 +355,14 @@ class SimulationRegistrationTests(unittest.TestCase):
     def test_static_workflow_tools_are_registered_with_expected_semantics(self):
         names = {item.name for item in registered_tools()}
         for name in ("create_static_study", "apply_fixed_fixture",
-                     "apply_force_load", "run_analysis", "get_stress_results"):
+                     "apply_force_load", "apply_pressure_load", "run_analysis",
+                     "get_stress_results", "get_displacement_results"):
             self.assertIn(name, names)
         for name in ("create_static_study", "apply_fixed_fixture",
-                     "apply_force_load", "run_analysis"):
+                     "apply_force_load", "apply_pressure_load", "run_analysis"):
             self.assertIs(OperationClass.MUTATE, operation_class_for(name))
-        self.assertIs(OperationClass.READ, operation_class_for("get_stress_results"))
+        for name in ("get_stress_results", "get_displacement_results"):
+            self.assertIs(OperationClass.READ, operation_class_for(name))
 
     def test_force_schema_requires_a_positive_magnitude(self):
         tools = {item.name: item for item in registered_tools()}
@@ -701,6 +755,204 @@ class StressResultTests(unittest.TestCase):
         automation = SimulationAutomation()
 
         result = get_stress_results(automation, study="nope")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SIMULATION_NO_STUDY", result["data"]["code"])
+
+
+class PressureLoadTests(unittest.TestCase):
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: f"face-{index}")
+    def test_adds_normal_pressure_and_reads_it_back(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = apply_pressure_load(automation, [4], 0.05)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(0.05, result["data"]["magnitude"])
+        self.assertEqual("mpa", result["data"]["unit"])
+        self.assertEqual(1e6, result["data"]["conversion_factor"])
+        self.assertEqual(50000.0, result["data"]["pressure_pascal"])
+        self.assertEqual(0.05, result["data"]["pressure_n_per_mm2"])
+        # The load reports pascal, so the stored number is the pascal value.
+        self.assertEqual(0, result["data"]["unit_index"])
+        self.assertEqual("Pa", result["data"]["unit_name"])
+        self.assertEqual(50000.0, result["data"]["stored_value"])
+        self.assertEqual(50000.0, result["data"]["read_back"])
+        self.assertEqual(50000.0, result["data"]["read_back_pascal"])
+        self.assertEqual(0, result["data"]["pressure_type"])
+        self.assertEqual(1, result["data"]["face_count"])
+        self.assertEqual(1, result["data"]["count_after"])
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_pressure_units_are_converted_to_pascal(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        cases = (
+            ("Pa", 20000.0, 20000.0),
+            ("kPa", 20.0, 20000.0),
+            ("MPa", 0.02, 20000.0),
+            ("N/mm2", 0.02, 20000.0),
+            ("bar", 0.2, 20000.0),
+            ("kgf/cm2", 0.203943242595585, 20000.0),
+            ("psi", 2.9007547546728511, 20000.0),
+            ("ksi", 0.0029007547546728511, 20000.0),
+        )
+        for unit, amount, expected in cases:
+            with self.subTest(unit=unit):
+                result = apply_pressure_load(automation, [4], amount, unit=unit)
+                self.assertTrue(result["success"], result["message"])
+                self.assertAlmostEqual(expected, result["data"]["pressure_pascal"],
+                                       places=6)
+                self.assertAlmostEqual(expected, result["data"]["read_back_pascal"],
+                                       places=6)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_value_is_expressed_in_the_unit_the_load_reports(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        # An IPS study reports psi on the load; the same physical pressure must
+        # then be stored as ~2.9 psi instead of 20000.
+        automation.model.StudyManager.studies[0] \
+            .LoadsAndRestraintsManager.pressure_unit_index = 1
+
+        result = apply_pressure_load(automation, [4], 0.02, unit="MPa")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(1, result["data"]["unit_index"])
+        self.assertEqual("psi", result["data"]["unit_name"])
+        self.assertAlmostEqual(20000.0 / 6894.757293168361,
+                               result["data"]["stored_value"], places=9)
+        self.assertAlmostEqual(20000.0, result["data"]["read_back_pascal"], places=6)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_unsupported_add_in_unit_is_reported(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        automation.model.StudyManager.studies[0] \
+            .LoadsAndRestraintsManager.pressure_unit_index = 7
+
+        result = apply_pressure_load(automation, [4], 0.02)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("PRESSURE_UNIT_UNSUPPORTED", result["data"]["code"])
+        self.assertEqual(7, result["data"]["unit_index"])
+
+    def test_unknown_pressure_unit_is_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        result = apply_pressure_load(automation, [4], 1.0, unit="torr")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("VALIDATION_FAILED", result["data"]["code"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_read_back_mismatch_is_a_failure(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        # The add-in accepted the call but stored a different pressure.
+        automation.model.StudyManager.studies[0].LoadsAndRestraintsManager.pressure_value = 0.9
+
+        result = apply_pressure_load(automation, [4], 0.05)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("PRESSURE_NOT_VERIFIED", result["data"]["code"])
+        self.assertEqual(0.9, result["data"]["read_back"])
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_simulation_error_code_is_mapped(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        automation.model.StudyManager.studies[0].LoadsAndRestraintsManager.pressure_error = 2
+
+        result = apply_pressure_load(automation, [4], 0.05)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("PRESSURE_NOT_CREATED", result["data"]["code"])
+        self.assertEqual(2, result["data"]["simulation_error_code"])
+
+    def test_invalid_pressure_input_is_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        self.assertFalse(apply_pressure_load(automation, [4], 0.0)["success"])
+        self.assertFalse(apply_pressure_load(automation, [4], -1.0)["success"])
+        self.assertFalse(apply_pressure_load(automation, [], 1.0)["success"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: f"face-{index}")
+    def test_pressure_keeps_the_add_in_unit_and_normal_type(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = apply_pressure_load(automation, [4], 10.0, unit="bar")
+
+        load = automation.model.StudyManager.studies[0].LoadsAndRestraintsManager._items[-1]
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(0, load.Unit)  # swsStrengthUnitPascal, set by the add-in
+        self.assertEqual(0, load.PressureType)  # swsPressureTypeNormal
+        self.assertEqual(1e6, load.Value)  # 10 bar = 1 MPa = 1e6 Pa
+
+
+class DisplacementResultTests(unittest.TestCase):
+    def test_reads_resultant_displacement_in_millimetres(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = get_displacement_results(automation)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(3, result["data"]["component"])
+        self.assertEqual("URES", result["data"]["component_name"])
+        self.assertEqual(1.842, result["data"]["displacement_max"])
+        self.assertEqual(345, result["data"]["node_max"])
+        self.assertEqual(0.0, result["data"]["displacement_min"])
+        call = automation.model.StudyManager.studies[0].Results.displacement_calls[0]
+        self.assertEqual((3, 1, 0), (call[0], call[1], call[3]))
+
+    def test_linear_unit_is_passed_to_the_add_in(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        for unit, expected in (("mm", 0), ("cm", 1), ("m", 2), ("inch", 3)):
+            with self.subTest(unit=unit):
+                result = get_displacement_results(automation, unit=unit)
+                self.assertTrue(result["success"], result["message"])
+                self.assertEqual(expected, result["data"]["unit_index"])
+
+    def test_unknown_unit_and_component_are_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        self.assertFalse(get_displacement_results(automation, unit="furlong")["success"])
+        self.assertFalse(get_displacement_results(automation, component=15)["success"])
+        self.assertFalse(get_displacement_results(automation, step=0)["success"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    def test_unavailable_step_is_reported(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = get_displacement_results(automation, step=4)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("RESULTS_STEP_UNAVAILABLE", result["data"]["code"])
+
+    def test_non_finite_displacement_is_rejected(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        automation.model.StudyManager.studies[0].Results.displacement_values = [
+            0, 0.0, 1, float("nan")]
+
+        result = get_displacement_results(automation)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("RESULTS_NOT_VALID", result["data"]["code"])
+
+    def test_missing_study_is_reported(self):
+        automation = SimulationAutomation()
+
+        result = get_displacement_results(automation, study="nope")
 
         self.assertFalse(result["success"])
         self.assertEqual("SIMULATION_NO_STUDY", result["data"]["code"])

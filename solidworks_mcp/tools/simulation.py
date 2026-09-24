@@ -39,6 +39,11 @@ SW_SIM_RESTRAINT_FIXED = 0
 #: Standard gravity in m/s^2, used to turn a mass load into a force.
 SW_SIM_GRAVITY = 9.80665
 
+# swsForceType_e / swsSelectionType_e
+SW_SIM_FORCE_NORMAL = 1
+SW_SIM_FORCE_TORQUE = 2
+SW_SIM_SELECTION_FACE_EDGE_VERTEX_POINT = 0
+
 #: Newtons per unit accepted by ``apply_force_load``. kN and kgf are forces;
 #: kg and t are masses whose weight (m * g) is applied.
 SW_SIM_FORCE_UNITS = {
@@ -49,19 +54,35 @@ SW_SIM_FORCE_UNITS = {
     "t": 1000.0 * SW_SIM_GRAVITY,
 }
 
-# swsForceType_e / swsSelectionType_e
-SW_SIM_FORCE_NORMAL = 1
-SW_SIM_FORCE_TORQUE = 2
-SW_SIM_SELECTION_FACE_EDGE_VERTEX_POINT = 0
+# swsPressureType_e
+SW_SIM_PRESSURE_NORMAL = 0
 
-#: Newtons per unit accepted by a force load. kN and kgf are forces; kg and t
-#: are masses whose weight (m * g) is applied.
-SW_SIM_FORCE_UNITS = {
-    "n": 1.0,
-    "kn": 1000.0,
-    "kgf": SW_SIM_GRAVITY,
-    "kg": SW_SIM_GRAVITY,
-    "t": 1000.0 * SW_SIM_GRAVITY,
+#: Pascal per unit accepted by ``apply_pressure_load``.
+SW_SIM_PRESSURE_UNITS = {
+    "pa": 1.0,
+    "kpa": 1e3,
+    "mpa": 1e6,
+    "n/mm2": 1e6,
+    "n/mm²": 1e6,
+    "bar": 1e5,
+    "kgf/cm2": 98066.5,
+    "psi": 6894.757293168361,
+    "ksi": 6894757.293168361,
+}
+
+#: The add-in ignores writes to ``ICWPressure.Unit`` inside the edit block
+#: (verified live: the unit stays Pascal), so the value is converted into the
+#: unit the load reports instead. Maps ``swsStrengthUnit_e`` to pascal.
+SW_SIM_PRESSURE_ADDIN_UNITS = {
+    0: 1.0,                # swsStrengthUnitPascal
+    1: 6894.757293168361,  # swsStrengthUnitPSI
+    2: 98066.5,            # swsStrengthUnitKilogramsPerSquareCentimeter
+    3: 1e6,                # swsStrengthUnitNewtonPerSquareMillimeter
+    4: 6894757.293168361,  # swsStrengthUnitKSI
+}
+
+SW_SIM_PRESSURE_UNIT_NAMES = {
+    0: "Pa", 1: "psi", 2: "kgf/cm2", 3: "N/mm2", 4: "ksi",
 }
 
 #: Newton-metres per unit accepted by a torque load. A mass cannot be a torque
@@ -77,6 +98,16 @@ SW_SIM_TORQUE_UNITS = {
 SW_SIM_STRESS_VON_MISES = 9
 SW_SIM_STRESS_UNIT_MPA = 3
 SW_SIM_LINEAR_UNIT_MM = 0
+
+#: swsLinearUnit_e index per unit accepted by ``get_displacement_results``.
+SW_SIM_LINEAR_UNITS = {"mm": 0, "cm": 1, "m": 2, "inch": 3}
+
+#: swsDisplacementComponent_e names, used only to report what was read.
+SW_SIM_DISPLACEMENT_COMPONENTS = {
+    0: "UX", 1: "UY", 2: "UZ", 3: "URES",
+    4: "RFX", 5: "RFY", 6: "RFZ", 7: "RFRES",
+    8: "RX", 9: "RY", 10: "RZ", 11: "RMX", 12: "RMY", 13: "RMZ", 14: "RMRES",
+}
 
 SW_SIM_STUDY_ERRORS = {
     1: "no solid body to process",
@@ -112,6 +143,17 @@ SW_SIM_FORCE_ERRORS = {
     10: "no entities were passed",
     11: "invalid entity array",
     14: "cannot apply this force to the selection",
+}
+
+#: swsPressureError_e
+SW_SIM_PRESSURE_ERRORS = {
+    1: "select a face or faces",
+    2: "select faces or shell edges",
+    3: "select a face, edge, plane, or axis",
+    4: "invalid pressure type",
+    5: "invalid study type for a pressure load",
+    6: "invalid entity array",
+    7: "cannot apply pressure to the selection",
 }
 
 SW_SIM_MESH_ERRORS = {
@@ -578,6 +620,125 @@ def apply_force_load(sw, face_indices: List[int], magnitude: float,
                           SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})
 
 
+@tool(
+    name="apply_pressure_load",
+    description=(
+        "Apply a normal pressure to planar faces of the active part and verify "
+        "the pressure is stored on a new load. Accepts Pa, kPa, MPa, N/mm2, "
+        "bar, kgf/cm2, psi or ksi; the value is handed to the solver in N/mm2."
+    ),
+    schema={"type": "object", "properties": {
+        "face_indices": {
+            "type": "array", "minItems": 1, "items": {"type": "integer"},
+            "description": "Planar-face indices from list_planar_faces."},
+        "magnitude": {
+            "type": "number", "exclusiveMinimum": 0,
+            "description": "Pressure magnitude, interpreted with unit."},
+        "unit": {
+            "type": "string", "enum": sorted(set(SW_SIM_PRESSURE_UNITS)),
+            "description": ("Pa, kPa, MPa, N/mm2, bar, kgf/cm2, psi or ksi. "
+                            "MPa and N/mm2 are the same unit. Default MPa.")},
+        "study": {"type": "string",
+                  "description": "Study name; defaults to the newest study."},
+    }, "required": ["face_indices", "magnitude"]},
+    operation_class=OperationClass.MUTATE,
+)
+def apply_pressure_load(sw, face_indices: List[int], magnitude: float,
+                        unit: str = "MPa", study: Optional[str] = None) -> dict:
+    if (not isinstance(magnitude, (int, float)) or isinstance(magnitude, bool)
+            or not math.isfinite(float(magnitude)) or float(magnitude) <= 0):
+        return sw._result(False, "magnitude must be a positive number.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if not isinstance(unit, str) or unit.strip().casefold() not in SW_SIM_PRESSURE_UNITS:
+        return sw._result(
+            False, "A pressure unit must be one of "
+                   + ", ".join(sorted(SW_SIM_PRESSURE_UNITS)) + ".",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED", "unit": unit})
+    unit_key = unit.strip().casefold()
+    factor = SW_SIM_PRESSURE_UNITS[unit_key]
+    amount = float(magnitude)
+    pressure_pascal = amount * factor
+    if not math.isfinite(pressure_pascal) or pressure_pascal <= 0:
+        return sw._result(False, "The converted pressure must be a positive number.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    error = _check_indices(sw, face_indices)
+    if error:
+        return error
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    faces, error = _faces(sw, document, face_indices)
+    if error:
+        return error
+    model, error = _simulation_model(sw)
+    if error:
+        return error
+    target, error = _resolve_study(sw, model, study)
+    if error:
+        return error
+    try:
+        manager = com(target, "LoadsAndRestraintsManager")
+        before = int(com(manager, "Count"))
+        errors = _int_byref()
+        pressure = com(manager, "AddPressure", SW_SIM_PRESSURE_NORMAL,
+                       _dispatch_array(faces), _null_dispatch(), errors)
+        if pressure is None:
+            reason = SW_SIM_PRESSURE_ERRORS.get(int(errors.value), "unknown error")
+            return sw._result(
+                False, "SolidWorks Simulation did not create the pressure load: "
+                       f"{reason}.",
+                SwErrors.swSimulationError,
+                {"code": "PRESSURE_NOT_CREATED",
+                 "simulation_error_code": int(errors.value)})
+        # The load reports the unit the study uses; the add-in ignores writes to
+        # Unit inside the edit block, so the value is expressed in that unit.
+        unit_index = int(com(pressure, "Unit"))
+        unit_factor = SW_SIM_PRESSURE_ADDIN_UNITS.get(unit_index)
+        if unit_factor is None:
+            return sw._result(
+                False, f"The pressure load reports an unsupported unit index "
+                       f"{unit_index}.",
+                SwErrors.swSimulationError,
+                {"code": "PRESSURE_UNIT_UNSUPPORTED", "unit_index": unit_index})
+        stored_value = pressure_pascal / unit_factor
+        com(pressure, "PressureBeginEdit")
+        set_com(pressure, "Value", stored_value)
+        end_code = int(com(pressure, "PressureEndEdit"))
+        after = int(com(manager, "Count"))
+        read_back = float(com(pressure, "Value"))
+        read_unit = int(com(pressure, "Unit"))
+        read_type = int(com(pressure, "PressureType"))
+        if (end_code != 0 or after != before + 1 or read_unit != unit_index
+                or read_type != SW_SIM_PRESSURE_NORMAL
+                or abs(read_back - stored_value) > max(1e-9, stored_value * 1e-6)):
+            return sw._result(
+                False, "The pressure load did not read back the requested value.",
+                SwErrors.swSimulationError,
+                {"code": "PRESSURE_NOT_VERIFIED", "count_before": before,
+                 "count_after": after, "pressure_type": read_type,
+                 "unit_index": read_unit, "pressure_edit_error": end_code,
+                 "magnitude": amount, "unit": unit_key,
+                 "pressure_pascal": pressure_pascal,
+                 "stored_value": stored_value, "read_back": read_back})
+        return sw._result(True, "Applied a pressure load.", data={
+            "study": str(com(target, "Name")),
+            "magnitude": amount, "unit": unit_key, "conversion_factor": factor,
+            "pressure_pascal": pressure_pascal,
+            "pressure_n_per_mm2": pressure_pascal / 1e6,
+            "unit_index": read_unit,
+            "unit_name": SW_SIM_PRESSURE_UNIT_NAMES.get(read_unit, "unknown"),
+            "stored_value": stored_value, "read_back": read_back,
+            "read_back_pascal": read_back * unit_factor,
+            "pressure_type": read_type,
+            "face_count": len(faces),
+            "count_before": before, "count_after": after,
+        })
+    except Exception as exc:
+        return sw._result(False, f"Applying the pressure load failed: {exc}",
+                          SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})
+
+
 def _reference_axis(sw, document, name: str):
     """
     Return the named reference-axis feature as a torque direction reference.
@@ -734,4 +895,95 @@ def get_stress_results(sw, study: Optional[str] = None, component: int = 9,
         })
     except Exception as exc:
         return sw._result(False, f"Reading the stress results failed: {exc}",
+                          SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})
+
+
+@tool(
+    name="get_displacement_results",
+    description=(
+        "Read the minimum and maximum displacement of a Simulation study step "
+        "and return the node indices and values. component 3 (the default) is "
+        "the resultant URES; 0/1/2 are UX/UY/UZ and 8/9/10 are the rotations."
+    ),
+    schema={"type": "object", "properties": {
+        "study": {"type": "string",
+                  "description": "Study name; defaults to the newest study."},
+        "component": {
+            "type": "integer", "minimum": 0, "maximum": 14,
+            "description": ("Displacement component (swsDisplacementComponent_e): "
+                            "0 UX, 1 UY, 2 UZ, 3 URES (default), 8-10 rotations.")},
+        "unit": {
+            "type": "string", "enum": sorted(SW_SIM_LINEAR_UNITS),
+            "description": "Linear unit for the translation; default mm."},
+        "step": {"type": "integer", "minimum": 1,
+                 "description": "Solution step number; default 1 for static studies."},
+    }, "required": []},
+    operation_class=OperationClass.READ,
+)
+def get_displacement_results(sw, study: Optional[str] = None, component: int = 3,
+                             unit: str = "mm", step: int = 1) -> dict:
+    for value, name in ((component, "component"), (step, "step")):
+        if not isinstance(value, int) or isinstance(value, bool):
+            return sw._result(False, f"{name} must be an integer.",
+                              SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if not 0 <= component <= 14:
+        return sw._result(False, "component must be from 0 to 14.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if step < 1:
+        return sw._result(False, "step must be at least 1.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if not isinstance(unit, str) or unit.strip().casefold() not in SW_SIM_LINEAR_UNITS:
+        return sw._result(
+            False, "A linear unit must be one of "
+                   + ", ".join(sorted(SW_SIM_LINEAR_UNITS)) + ".",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED", "unit": unit})
+    unit_key = unit.strip().casefold()
+    unit_index = SW_SIM_LINEAR_UNITS[unit_key]
+    model, error = _simulation_model(sw)
+    if error:
+        return error
+    target, error = _resolve_study(sw, model, study)
+    if error:
+        return error
+    try:
+        results = com(target, "Results")
+        if results is None:
+            return sw._result(False, "The study has no results object.",
+                              SwErrors.swSimulationError, {"code": "SIMULATION_NO_RESULTS"})
+        available = int(com(results, "GetMaximumAvailableSteps"))
+        if available < step:
+            return sw._result(
+                False, f"Step {step} is not available; the study has {available} step(s).",
+                SwErrors.swSimulationError,
+                {"code": "RESULTS_STEP_UNAVAILABLE", "available_steps": available})
+        errors = _int_byref()
+        values = com(results, "GetMinMaxDisplacement", component, step,
+                     _null_dispatch(), unit_index, errors)
+        if values is None or len(values) < 4:
+            return sw._result(
+                False, "The study returned no displacement values.",
+                SwErrors.swSimulationError,
+                {"code": "RESULTS_NOT_AVAILABLE",
+                 "simulation_error_code": int(errors.value),
+                 "available_steps": available})
+        node_min, displacement_min = int(values[0]), float(values[1])
+        node_max, displacement_max = int(values[2]), float(values[3])
+        if not (math.isfinite(displacement_min) and math.isfinite(displacement_max)):
+            return sw._result(
+                False, "The displacement values are not finite.",
+                SwErrors.swSimulationError,
+                {"code": "RESULTS_NOT_VALID", "displacement_min": displacement_min,
+                 "displacement_max": displacement_max})
+        return sw._result(True, "Read the displacement results.", data={
+            "study": str(com(target, "Name")),
+            "component": component,
+            "component_name": SW_SIM_DISPLACEMENT_COMPONENTS.get(component, "unknown"),
+            "step": step, "unit": unit_key, "unit_index": unit_index,
+            "available_steps": available,
+            "node_min": node_min, "displacement_min": displacement_min,
+            "node_max": node_max, "displacement_max": displacement_max,
+        })
+    except Exception as exc:
+        return sw._result(False, f"Reading the displacement results failed: {exc}",
                           SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})

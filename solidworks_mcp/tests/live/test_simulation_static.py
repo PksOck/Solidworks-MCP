@@ -22,8 +22,9 @@ from solidworks_mcp.tools.material import apply_material
 from solidworks_mcp.tools.reference_geometry import create_reference_axis
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.simulation import (
-    apply_fixed_fixture, apply_force_load, create_static_study,
-    get_stress_results, run_analysis)
+    apply_fixed_fixture, apply_force_load, apply_pressure_load,
+    create_static_study, get_displacement_results, get_stress_results,
+    run_analysis)
 from solidworks_mcp.tools.weldments import (
     create_structural_member, list_weldment_profiles)
 
@@ -347,6 +348,112 @@ class LiveSimulationStaticTests(unittest.TestCase):
         self.assertGreaterEqual(result["data"]["node_max"], 0)
         # The solved beam mesh must have the node the maximum refers to.
         self.assertLess(result["data"]["node_max"], analysis["data"]["node_count"])
+
+
+    # -- pressure load case -------------------------------------------------
+    def test_pressure_load_matches_the_equivalent_force(self):
+        """Pressure p over face area A must deform like a force p * A."""
+        self._beam()
+        fixed, _loaded = self._end_faces()
+        flange = self._flange_face()
+        listed = list_planar_faces(self.automation)
+        self.assertTrue(listed["success"], listed["message"])
+        area_mm2 = next(item["area_mm2"] for item in listed["data"]["faces"]
+                        if item["index"] == flange)
+        self.assertGreater(area_mm2, 0)
+        pressure_n_per_mm2 = 0.02  # 0.02 MPa over the 220 x 600 mm IPE flange
+        equivalent_newtons = pressure_n_per_mm2 * area_mm2
+
+        self.assertTrue(create_static_study(self.automation, "MCP Tlak")["success"])
+        fixture = apply_fixed_fixture(self.automation, [fixed], study="MCP Tlak")
+        self.assertTrue(fixture["success"], fixture["message"])
+
+        pressure = apply_pressure_load(self.automation, [flange], pressure_n_per_mm2,
+                                       unit="MPa", study="MCP Tlak")
+
+        self.assertTrue(pressure["success"], pressure["message"])
+        self.assertEqual("mpa", pressure["data"]["unit"])
+        self.assertEqual(0, pressure["data"]["unit_index"])  # the study is SI
+        self.assertEqual("Pa", pressure["data"]["unit_name"])
+        self.assertAlmostEqual(20000.0, pressure["data"]["pressure_pascal"], places=6)
+        self.assertAlmostEqual(20000.0, pressure["data"]["read_back_pascal"], places=6)
+        self.assertEqual(0, pressure["data"]["pressure_type"])
+        self.assertEqual(2, pressure["data"]["count_after"])
+
+        analysis = run_analysis(self.automation, study="MCP Tlak")
+        if not analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             analysis["data"].get("code"), analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+        self.assertEqual(0, analysis["data"]["run_error"])
+
+        stress = get_stress_results(self.automation, study="MCP Tlak")
+        self.assertTrue(stress["success"], stress["message"])
+        self.assertGreater(stress["data"]["stress_max_mpa"], 0)
+
+        # The geometric proof: the pressure really moved the beam.
+        under_pressure = get_displacement_results(self.automation, study="MCP Tlak")
+        self.assertTrue(under_pressure["success"], under_pressure["message"])
+        self.assertGreater(under_pressure["data"]["displacement_max"], 0)
+
+        # Physical cross-check: the same total load as one normal force must give
+        # the same deflection, so the pascal value cannot be off by a factor.
+        self.assertTrue(create_static_study(self.automation, "MCP Sila")["success"])
+        self.assertTrue(apply_fixed_fixture(self.automation, [fixed],
+                                           study="MCP Sila")["success"])
+        force = apply_force_load(self.automation, [flange], equivalent_newtons,
+                                 unit="N", study="MCP Sila")
+        self.assertTrue(force["success"], force["message"])
+        self.assertAlmostEqual(equivalent_newtons, force["data"]["force_newtons"],
+                               places=6)
+
+        force_analysis = run_analysis(self.automation, study="MCP Sila")
+        if not force_analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             force_analysis["data"].get("code"),
+                             force_analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+
+        under_force = get_displacement_results(self.automation, study="MCP Sila")
+        self.assertTrue(under_force["success"], under_force["message"])
+
+        self.assertAlmostEqual(
+            under_force["data"]["displacement_max"],
+            under_pressure["data"]["displacement_max"],
+            delta=0.05 * under_force["data"]["displacement_max"])
+
+    # -- displacement results ----------------------------------------------
+    def test_displacement_is_reported_in_the_requested_unit(self):
+        """The same resultant displacement in mm and in m must differ by 1000."""
+        self._beam()
+        fixed, loaded = self._end_faces()
+        flange = self._flange_face()
+        self.assertTrue(create_static_study(self.automation, "MCP Pomiki")["success"])
+        self.assertTrue(apply_fixed_fixture(self.automation, [fixed],
+                                           study="MCP Pomiki")["success"])
+        force = apply_force_load(self.automation, [flange], 200.0, unit="kg",
+                                 study="MCP Pomiki")
+        self.assertTrue(force["success"], force["message"])
+
+        analysis = run_analysis(self.automation, study="MCP Pomiki")
+        if not analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             analysis["data"].get("code"), analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+
+        millimetres = get_displacement_results(self.automation, study="MCP Pomiki",
+                                              unit="mm")
+        metres = get_displacement_results(self.automation, study="MCP Pomiki",
+                                         unit="m")
+
+        self.assertTrue(millimetres["success"], millimetres["message"])
+        self.assertTrue(metres["success"], metres["message"])
+        self.assertEqual("URES", millimetres["data"]["component_name"])
+        self.assertEqual(0, millimetres["data"]["unit_index"])
+        self.assertEqual(2, metres["data"]["unit_index"])
+        self.assertGreater(millimetres["data"]["displacement_max"], 0)
+        self.assertAlmostEqual(millimetres["data"]["displacement_max"] / 1000.0,
+                               metres["data"]["displacement_max"], places=6)
 
 
 if __name__ == "__main__":
