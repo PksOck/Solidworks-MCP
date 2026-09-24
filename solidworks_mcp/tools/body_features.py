@@ -3,9 +3,15 @@
 SOLIDWORKS 2025 TLB: IBody2.Select2(Append, Data),
 IFeatureManager.InsertScale(Type, Uniform, Xscale, YScale, ZScale).
 swScaleAboutCentroid=0, swScaleAboutOrigin=1 (swconst.tlb).
+
+IPartDoc.InsertPart3(FileName, Options, Configuration) imports the solids of
+another saved part as a new Stock body; swInsertPartOptions_e.
+swInsertPartImportSolids=1 (swconst.tlb).
 """
 
 import math
+import os
+
 import pythoncom
 from win32com.client import VARIANT
 
@@ -265,5 +271,74 @@ def combine_bodies(sw, target_index: int, tool_index: int, operation: str) -> di
         })
     except Exception as exc:
         return sw._result(False, f"Combine failed: {exc}", SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="insert_part",
+    description=("Insert the solid geometry of another saved part (.SLDPRT) into "
+                 "the active part as a new Stock body."),
+    schema={"type": "object", "properties": {
+        "part_path": {"type": "string", "minLength": 1,
+                      "description": "Full path of the source .SLDPRT file."},
+    }, "required": ["part_path"]},
+    operation_class=OperationClass.MUTATE,
+)
+def insert_part(sw, part_path: str) -> dict:
+    if not isinstance(part_path, str) or not part_path.strip():
+        return sw._result(False, "part_path must be a non-empty path.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    path = os.path.abspath(part_path.strip())
+    if os.path.splitext(path)[1].casefold() != ".sldprt":
+        return sw._result(False, "Insert Part requires a .SLDPRT source file.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if not os.path.isfile(path):
+        return sw._result(False, f"Source part not found: {path}",
+                          SwErrors.swInvalidInput,
+                          {"code": "SOURCE_NOT_FOUND", "path": path})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Insert Part requires an active part.",
+                          SwErrors.swInvalidFileType)
+    try:
+        before_bodies = com(document, "GetBodies2", 0, True) or []
+        before_count = len(before_bodies)
+        before_volume = sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                            for body in before_bodies)
+        # IPartDoc.InsertPart3(FileName, Options, Configuration);
+        # swInsertPartOptions_e.swInsertPartImportSolids = 1 (swconst.tlb).
+        feature = com(document, "InsertPart3", path, 1, "")
+        after_bodies = com(document, "GetBodies2", 0, True) or []
+        after_count = len(after_bodies)
+        after_volume = sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                           for body in after_bodies)
+        error_code = com(feature, "GetErrorCode") if feature is not None else 1
+        if (feature is None or error_code
+                or after_volume <= before_volume + 1e-6
+                or after_count <= before_count):
+            return sw._result(False, "Insert Part did not add the source solid.",
+                              SwErrors.swFeatureError, {
+                                  "code": "INSERT_PART_FAILED",
+                                  "bodies_before": before_count,
+                                  "bodies_after": after_count,
+                                  "volume_before_mm3": before_volume,
+                                  "volume_after_mm3": after_volume,
+                                  "feature_error_code": int(error_code)})
+        return sw._result(
+            True,
+            f"Inserted {os.path.splitext(os.path.basename(path))[0]}.",
+            data={
+                "feature_name": str(com(feature, "Name")),
+                "feature_type": str(com(feature, "GetTypeName2")),
+                "source_path": path, "bodies_before": before_count,
+                "bodies_after": after_count, "volume_before_mm3": before_volume,
+                "volume_after_mm3": after_volume,
+            })
+    except Exception as exc:
+        return sw._result(False, f"Insert Part failed: {exc}",
+                          SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)

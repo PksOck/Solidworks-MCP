@@ -192,10 +192,14 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 ---
 
-## 👤 Author
+## 👤 Original author
 
 **Samsaam Ali Baig**
 - GitHub: [@alisamsam](https://github.com/alisamsam)
+
+Additional development on the `additional-upgrades` branch: **PksOck**.
+This branch is being prepared as a consolidated pull request for the original
+author's review; its changes have not been merged upstream.
 
 ---
 
