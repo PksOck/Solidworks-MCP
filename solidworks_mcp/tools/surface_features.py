@@ -2,6 +2,9 @@
 
 import math
 
+import pythoncom
+import win32com.client
+
 from ..comutil import com
 from ..constants import SwErrors
 from ..core.policy import OperationClass
@@ -728,6 +731,69 @@ def sweep_surface(sw, profile_sketch: str, path_sketch: str) -> dict:
         })
     except Exception as create_error:
         return sw._result(False, f"Surface sweep failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="filled_surface",
+    description=("Fill a closed 2D sketch boundary with a filled surface patch. "
+                 "Supply its exact feature name."),
+    schema={"type": "object", "properties": {
+        "sketch_name": {"type": "string", "minLength": 1},
+    }, "required": ["sketch_name"]},
+    operation_class=OperationClass.MUTATE,
+)
+def filled_surface(sw, sketch_name: str) -> dict:
+    if not isinstance(sketch_name, str) or not sketch_name.strip():
+        return sw._result(False, "sketch_name must be a non-empty name.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "A filled surface requires an active part.",
+                          SwErrors.swInvalidFileType)
+    sketch = _find_feature(document, sketch_name)
+    if sketch is None or com(sketch, "GetTypeName2") != "ProfileFeature":
+        return sw._result(False, f"2D sketch not found: {sketch_name}",
+                          SwErrors.swSelectionError)
+    try:
+        segments = com(com(sketch, "GetSpecificFeature2"), "GetSketchSegments") or []
+        if not segments:
+            return sw._result(False, "The selected sketch has no boundary segments.",
+                              SwErrors.swInvalidInput)
+        sheets_before = com(document, "GetBodies2", 1, True) or []
+        com(document, "ClearSelection2", True)
+        # InsertFillSurface only recognizes a boundary picked through
+        # SelectByID2("...", "SKETCH", ..., Mark=1) -- selecting the sketch
+        # feature object directly (Select2) or its segments (Select4) is
+        # silently ignored and the call returns Nothing (live-verified).
+        callout = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        if not com(document.Extension, "SelectByID2", sketch_name, "SKETCH",
+                   0.0, 0.0, 0.0, False, 1, callout, 0):
+            return sw._result(False, "Could not select the sketch boundary.",
+                              SwErrors.swSelectionError)
+        # SW2025 IFeatureManager.InsertFillSurface(Options) -> IFeature;
+        # Options=0 leaves every swFeatureFillSurfaceOptions_e flag off.
+        feature = com(com(document, "FeatureManager"), "InsertFillSurface", 0)
+        sheets_after = com(document, "GetBodies2", 1, True) or []
+        area_after = sum(com(face, "GetArea") * 1e6 for body in sheets_after
+                         for face in (com(body, "GetFaces") or []))
+        if (feature is None or len(sheets_after) <= len(sheets_before)
+                or area_after <= 0 or com(feature, "GetErrorCode")):
+            return sw._result(False, "Filled surface did not create a valid patch.",
+                              SwErrors.swFeatureError, {"sheets_before": len(sheets_before),
+                                                       "sheets_after": len(sheets_after),
+                                                       "area_after_mm2": area_after})
+        return sw._result(True, f"Created filled surface {com(feature, 'Name')}.", data={
+            "feature_name": str(com(feature, "Name")), "sketch_name": sketch_name,
+            "boundary_segments": len(segments), "sheets_after": len(sheets_after),
+            "area_after_mm2": area_after,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Filled surface failed: {create_error}",
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)

@@ -40,7 +40,7 @@ from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.appearance import set_appearance
 from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.body_features import combine_bodies, delete_body, move_copy_body, scale_body
-from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, knit_surface, loft_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, sweep_surface, thicken_surface
+from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, filled_surface, knit_surface, loft_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, sweep_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
 
@@ -1360,6 +1360,31 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertGreater(part_path.stat().st_size, 0)
         part, error = self.automation.get_active_doc()
         self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_filled_surface_patches_closed_sketch_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_filled_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-15, -15, 15, 15, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        sketch_name = self._last_sketch_name(part)
+        result = filled_surface(self.automation, sketch_name)
+        self.assertTrue(result["success"], f'{result["message"]}; {result.get("data")}; {self._top_level_feature_types()}')
+        self.assertEqual(4, result["data"]["boundary_segments"])
+        self.assertEqual(1, len(com(part, "GetBodies2", 1, True) or []))
+        self.assertAlmostEqual(900, result["data"]["area_after_mm2"], delta=1)
+        self.assertAlmostEqual(0, self._total_volume_mm3(), delta=0.01)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
         title = str(com(part, "GetTitle"))
         self.created_titles.append(title)
         self.automation.app.CloseDoc(title)
