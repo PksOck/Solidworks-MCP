@@ -51,7 +51,27 @@ SW_SIM_FORCE_UNITS = {
 
 # swsForceType_e / swsSelectionType_e
 SW_SIM_FORCE_NORMAL = 1
+SW_SIM_FORCE_TORQUE = 2
 SW_SIM_SELECTION_FACE_EDGE_VERTEX_POINT = 0
+
+#: Newtons per unit accepted by a force load. kN and kgf are forces; kg and t
+#: are masses whose weight (m * g) is applied.
+SW_SIM_FORCE_UNITS = {
+    "n": 1.0,
+    "kn": 1000.0,
+    "kgf": SW_SIM_GRAVITY,
+    "kg": SW_SIM_GRAVITY,
+    "t": 1000.0 * SW_SIM_GRAVITY,
+}
+
+#: Newton-metres per unit accepted by a torque load. A mass cannot be a torque
+#: without a lever arm, so only torque units are listed.
+SW_SIM_TORQUE_UNITS = {
+    "n*m": 1.0,
+    "kn*m": 1000.0,
+    "n*mm": 0.001,
+    "kgf*m": SW_SIM_GRAVITY,
+}
 
 # swsStressComponent_e / swsStrengthUnit_e / swsLinearUnit_e
 SW_SIM_STRESS_VON_MISES = 9
@@ -420,10 +440,10 @@ def apply_fixed_fixture(sw, face_indices: List[int], study: Optional[str] = None
 @tool(
     name="apply_force_load",
     description=(
-        "Apply a normal force load to planar faces of the active part and "
-        "verify the load count, type and stored value. The magnitude may be "
-        "given in a force unit (N, kN, kgf) or as an equivalent mass (kg, t) "
-        "that is converted with g = 9.80665 m/s2."
+        "Apply a normal force or a torque to planar faces of the active part "
+        "and verify the load count, type and stored value. A force takes N, "
+        "kN, kgf, kg or t; a torque takes N*m, kN*m, N*mm or kgf*m and needs a "
+        "reference axis feature for the direction."
     ),
     schema={"type": "object", "properties": {
         "face_indices": {
@@ -431,35 +451,55 @@ def apply_fixed_fixture(sw, face_indices: List[int], study: Optional[str] = None
             "description": "Planar-face indices from list_planar_faces."},
         "magnitude": {
             "type": "number", "exclusiveMinimum": 0,
-            "description": "Load magnitude, interpreted with unit; applied normal to the faces."},
+            "description": "Load magnitude, interpreted with unit."},
+        "load_type": {"type": "string", "enum": ["force", "torque"],
+                      "description": "force (default, normal to the faces) or torque."},
         "unit": {
-            "type": "string", "enum": sorted(SW_SIM_FORCE_UNITS),
-            "description": ("N, kN and kgf are forces; kg and t are masses whose "
-                            "weight is used (m * 9.80665). Default N.")},
+            "type": "string",
+            "enum": sorted(set(SW_SIM_FORCE_UNITS) | set(SW_SIM_TORQUE_UNITS)),
+            "description": ("Force: N, kN, kgf are forces; kg and t are masses "
+                            "whose weight is used (m * 9.80665). Torque: N*m, "
+                            "kN*m, N*mm, kgf*m. Default N.")},
+        "reference": {
+            "type": "string",
+            "description": ("Name of an existing reference axis feature; required "
+                            "for a torque, ignored for a force.")},
         "study": {"type": "string",
                   "description": "Study name; defaults to the newest study."},
     }, "required": ["face_indices", "magnitude"]},
     operation_class=OperationClass.MUTATE,
 )
 def apply_force_load(sw, face_indices: List[int], magnitude: float,
-                     unit: str = "N", study: Optional[str] = None) -> dict:
+                     unit: str = "N", load_type: str = "force",
+                     reference: Optional[str] = None,
+                     study: Optional[str] = None) -> dict:
+    if load_type not in ("force", "torque"):
+        return sw._result(False, "load_type must be 'force' or 'torque'.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
     if (not isinstance(magnitude, (int, float)) or isinstance(magnitude, bool)
             or not math.isfinite(float(magnitude)) or float(magnitude) <= 0):
         return sw._result(False, "magnitude must be a positive number.",
                           SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
-    if not isinstance(unit, str) or unit.strip().casefold() not in SW_SIM_FORCE_UNITS:
+    table = SW_SIM_FORCE_UNITS if load_type == "force" else SW_SIM_TORQUE_UNITS
+    if not isinstance(unit, str) or unit.strip().casefold() not in table:
         return sw._result(
-            False, "unit must be one of "
-                   + ", ".join(sorted(SW_SIM_FORCE_UNITS)) + ".",
+            False, f"A {load_type} unit must be one of "
+                   + ", ".join(sorted(table)) + ".",
             SwErrors.swInvalidInput,
-            {"code": "VALIDATION_FAILED", "unit": unit})
+            {"code": "VALIDATION_FAILED", "unit": unit, "load_type": load_type})
+    if load_type == "torque" and (not isinstance(reference, str)
+                                  or not reference.strip()):
+        return sw._result(
+            False, "A torque needs reference: the name of a reference axis feature.",
+            SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
     unit_key = unit.strip().casefold()
-    factor = SW_SIM_FORCE_UNITS[unit_key]
+    factor = table[unit_key]
     amount = float(magnitude)
-    newtons = amount * factor
-    if not math.isfinite(newtons) or newtons <= 0:
-        return sw._result(False, "The converted force must be a positive number.",
+    load_value = amount * factor
+    if not math.isfinite(load_value) or load_value <= 0:
+        return sw._result(False, "The converted load must be a positive number.",
                           SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    force_type = SW_SIM_FORCE_NORMAL if load_type == "force" else SW_SIM_FORCE_TORQUE
     error = _check_indices(sw, face_indices)
     if error:
         return error
@@ -469,6 +509,16 @@ def apply_force_load(sw, face_indices: List[int], magnitude: float,
     faces, error = _faces(sw, document, face_indices)
     if error:
         return error
+    ref_geom = _null_dispatch()
+    if load_type == "torque":
+        ref_geom = _reference_axis(sw, document, reference.strip())
+        if ref_geom is None:
+            return sw._result(
+                False, f"Reference axis not found: {reference.strip()}. Create one "
+                       "with create_reference_axis first.",
+                SwErrors.swSelectionError,
+                {"code": "SIMULATION_REFERENCE_NOT_FOUND",
+                 "reference": reference.strip()})
     model, error = _simulation_model(sw)
     if error:
         return error
@@ -479,44 +529,69 @@ def apply_force_load(sw, face_indices: List[int], magnitude: float,
         manager = com(target, "LoadsAndRestraintsManager")
         before = int(com(manager, "Count"))
         errors = _int_byref()
-        force = com(manager, "AddForce2", SW_SIM_FORCE_NORMAL,
+        force = com(manager, "AddForce2", force_type,
                     SW_SIM_SELECTION_FACE_EDGE_VERTEX_POINT,
-                    _dispatch_array(faces), _null_dispatch(), errors)
+                    _dispatch_array(faces), ref_geom, errors)
         if force is None:
             reason = SW_SIM_FORCE_ERRORS.get(int(errors.value), "unknown error")
             return sw._result(
-                False, f"SolidWorks Simulation did not create the force load: {reason}.",
+                False, f"SolidWorks Simulation did not create the {load_type} load: "
+                       f"{reason}.",
                 SwErrors.swSimulationError,
                 {"code": "FORCE_NOT_CREATED",
                  "simulation_error_code": int(errors.value)})
         com(force, "ForceBeginEdit")
-        set_com(force, "NormalForceOrTorqueValue", newtons)
+        set_com(force, "NormalForceOrTorqueValue", load_value)
         end_code = int(com(force, "ForceEndEdit"))
         after = int(com(manager, "Count"))
-        force_type = int(com(force, "ForceType"))
         read_back = float(com(force, "NormalForceOrTorqueValue"))
-        if (end_code != 0 or after != before + 1
-                or force_type != SW_SIM_FORCE_NORMAL
-                or abs(read_back - newtons) > max(1e-6, newtons * 1e-6)):
+        read_type = int(com(force, "ForceType"))
+        if (end_code != 0 or after != before + 1 or read_type != force_type
+                or abs(read_back - load_value) > max(1e-6, load_value * 1e-6)):
             return sw._result(
-                False, "The force load did not read back the requested magnitude.",
+                False, f"The {load_type} load did not read back the requested value.",
                 SwErrors.swSimulationError,
                 {"code": "FORCE_NOT_VERIFIED", "count_before": before,
-                 "count_after": after, "force_type": force_type,
-                 "force_edit_error": end_code,
-                 "magnitude": amount, "unit": unit_key,
-                 "force_newtons": newtons, "read_back_newtons": read_back})
-        return sw._result(True, "Applied a normal force load.", data={
+                 "count_after": after, "force_type": read_type,
+                 "force_edit_error": end_code, "magnitude": amount,
+                 "unit": unit_key, "load_type": load_type,
+                 "load_value": load_value, "read_back": read_back})
+        data = {
             "study": str(com(target, "Name")),
-            "magnitude": amount, "unit": unit_key,
-            "conversion_factor": factor, "force_newtons": newtons,
-            "read_back_newtons": read_back,
-            "force_type": force_type, "face_count": len(faces),
+            "load_type": load_type, "magnitude": amount, "unit": unit_key,
+            "conversion_factor": factor, "load_value": load_value,
+            "read_back": read_back, "force_type": read_type,
+            "face_count": len(faces),
             "count_before": before, "count_after": after,
-        })
+        }
+        if load_type == "force":
+            data["force_newtons"] = load_value
+            data["read_back_newtons"] = read_back
+            data["reference"] = None
+        else:
+            data["torque_nm"] = load_value
+            data["read_back_nm"] = read_back
+            data["reference"] = reference.strip()
+        return sw._result(True, f"Applied a {load_type} load.", data=data)
     except Exception as exc:
-        return sw._result(False, f"Applying the force load failed: {exc}",
+        return sw._result(False, f"Applying the {load_type} load failed: {exc}",
                           SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})
+
+
+def _reference_axis(sw, document, name: str):
+    """
+    Return the named reference-axis feature as a torque direction reference.
+
+    The add-in accepts the ``IFeature`` itself here; passing its specific
+    feature (``IRefAxis``) raises DISP_E_ARRAYISLOCKED. A cylindrical face is
+    accepted too but is not addressable by name.
+    """
+    feature = com(document, "FeatureByName", name)
+    if feature is None:
+        return None
+    if str(com(feature, "GetTypeName2")) != "RefAxis":
+        return None
+    return feature
 
 
 @tool(

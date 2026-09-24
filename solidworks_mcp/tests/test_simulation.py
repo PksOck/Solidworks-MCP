@@ -235,25 +235,31 @@ class FakePlane:
     pass
 
 
-class FakePlaneFeature:
-    def __init__(self, name):
+class FakeFeature:
+    def __init__(self, name, type_name):
         self.Name = name
+        self.type_name = type_name
 
     def GetTypeName2(self):
-        return "RefPlane"
+        return self.type_name
 
     def GetSpecificFeature2(self):
         return FakePlane()
 
 
 class FakeDocument:
-    def __init__(self, doc_type=1, has_plane=True, plane_name="Front Plane"):
+    def __init__(self, doc_type=1, has_plane=True, plane_name="Front Plane",
+                 axis_name="Axis1"):
         self.doc_type = doc_type
         self.SelectionManager = FakeSelectionManager()
         self.Extension = FakeExtension(self.SelectionManager)
         self.clear_calls = []
         self.reference_lookups = []
-        self._plane = FakePlaneFeature(plane_name) if has_plane else None
+        self._features = {}
+        if has_plane:
+            self._features[plane_name] = FakeFeature(plane_name, "RefPlane")
+        if axis_name is not None:
+            self._features[axis_name] = FakeFeature(axis_name, "RefAxis")
 
     def GetType(self):
         return self.doc_type
@@ -264,9 +270,7 @@ class FakeDocument:
 
     def FeatureByName(self, name):
         self.reference_lookups.append(name)
-        if self._plane is not None and name == self._plane.Name:
-            return self._plane
-        return None
+        return self._features.get(name)
 
 
 class FakeApp:
@@ -311,8 +315,9 @@ class SimulationRegistrationTests(unittest.TestCase):
         schema = tools["apply_force_load"].inputSchema
         self.assertEqual(["face_indices", "magnitude"], schema["required"])
         self.assertEqual(0, schema["properties"]["magnitude"]["exclusiveMinimum"])
-        self.assertEqual(["kg", "kgf", "kn", "n", "t"],
+        self.assertEqual(["kg", "kgf", "kgf*m", "kn", "kn*m", "n", "n*m", "n*mm", "t"],
                          schema["properties"]["unit"]["enum"])
+        self.assertEqual(["force", "torque"], schema["properties"]["load_type"]["enum"])
 
 
 class CreateStaticStudyTests(unittest.TestCase):
@@ -436,6 +441,7 @@ class ForceLoadTests(unittest.TestCase):
         self.assertTrue(result["success"], result["message"])
         self.assertEqual(1000.0, result["data"]["magnitude"])
         self.assertEqual("n", result["data"]["unit"])
+        self.assertEqual("force", result["data"]["load_type"])
         self.assertEqual(1.0, result["data"]["conversion_factor"])
         self.assertEqual(1000.0, result["data"]["force_newtons"])
         self.assertEqual(1000.0, result["data"]["read_back_newtons"])
@@ -486,7 +492,7 @@ class ForceLoadTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("FORCE_NOT_VERIFIED", result["data"]["code"])
-        self.assertEqual(5.0, result["data"]["read_back_newtons"])
+        self.assertEqual(5.0, result["data"]["read_back"])
 
     @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
     def test_simulation_error_code_is_mapped(self, _lookup):
@@ -508,6 +514,103 @@ class ForceLoadTests(unittest.TestCase):
                 result = apply_force_load(automation, [2], magnitude)
                 self.assertFalse(result["success"])
         self.assertEqual(0, automation.active_doc_calls)
+
+
+class TorqueLoadTests(unittest.TestCase):
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: f"face-{index}")
+    def test_adds_torque_about_a_reference_axis(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "Zasuk")
+
+        result = apply_force_load(automation, [2], 500.0, unit="N*m",
+                                  load_type="torque", reference="Axis1")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("torque", result["data"]["load_type"])
+        self.assertEqual(500.0, result["data"]["torque_nm"])
+        self.assertEqual(500.0, result["data"]["read_back_nm"])
+        self.assertEqual(2, result["data"]["force_type"])
+        self.assertEqual("Axis1", result["data"]["reference"])
+        self.assertEqual(1, result["data"]["count_after"])
+        self.assertEqual(["Axis1"], automation.document.reference_lookups)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_torque_units_are_converted_to_newton_metres(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "Zasuk")
+
+        for unit, amount, expected in (("N*mm", 500000.0, 500.0),
+                                       ("kN*m", 0.5, 500.0),
+                                       ("kgf*m", 100.0, 980.665)):
+            with self.subTest(unit=unit):
+                result = apply_force_load(automation, [2], amount, unit=unit,
+                                          load_type="torque", reference="Axis1")
+                self.assertTrue(result["success"], result["message"])
+                self.assertAlmostEqual(expected, result["data"]["torque_nm"], places=6)
+                self.assertAlmostEqual(expected, result["data"]["read_back_nm"],
+                                       places=6)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_read_back_mismatch_is_a_failure(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "Zasuk")
+        automation.model.StudyManager.studies[0].LoadsAndRestraintsManager.force_value = 7.0
+
+        result = apply_force_load(automation, [2], 500.0, unit="N*m",
+                                  load_type="torque", reference="Axis1")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("FORCE_NOT_VERIFIED", result["data"]["code"])
+        self.assertEqual(7.0, result["data"]["read_back"])
+
+    def test_torque_without_a_reference_is_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        result = apply_force_load(automation, [2], 500.0, load_type="torque")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("VALIDATION_FAILED", result["data"]["code"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    def test_force_unit_is_rejected_for_a_torque_before_com(self):
+        automation = SimulationAutomation()
+
+        result = apply_force_load(automation, [2], 500.0, unit="kg",
+                                  load_type="torque", reference="Axis1")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("VALIDATION_FAILED", result["data"]["code"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    def test_unknown_load_type_is_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        result = apply_force_load(automation, [2], 500.0, load_type="pressure")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_unknown_reference_axis_is_reported(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "Zasuk")
+
+        result = apply_force_load(automation, [2], 500.0, unit="N*m",
+                                  load_type="torque", reference="Axis9")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SIMULATION_REFERENCE_NOT_FOUND", result["data"]["code"])
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_a_non_axis_feature_is_rejected_as_a_torque_reference(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "Zasuk")
+
+        result = apply_force_load(automation, [2], 500.0, unit="N*m",
+                                  load_type="torque", reference="Front Plane")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SIMULATION_REFERENCE_NOT_FOUND", result["data"]["code"])
 
 
 class RunAnalysisTests(unittest.TestCase):

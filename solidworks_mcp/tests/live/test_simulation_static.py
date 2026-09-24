@@ -19,6 +19,7 @@ from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.tools.export import list_planar_faces
 from solidworks_mcp.tools.material import apply_material
+from solidworks_mcp.tools.reference_geometry import create_reference_axis
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.simulation import (
     apply_fixed_fixture, apply_force_load, create_static_study,
@@ -108,20 +109,60 @@ class LiveSimulationStaticTests(unittest.TestCase):
         return sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
                    for body in com(self._document(), "GetBodies2", 0, True) or [])
 
-    def _end_faces(self):
-        """The two end caps of the beam, as planar-face indices."""
+    def _planar_faces(self):
+        """The beam's planar faces and the index of its axis."""
         listed = list_planar_faces(self.automation)
         self.assertTrue(listed["success"], listed["message"])
         faces = listed["data"]["faces"]
+        self.assertTrue(faces, "The beam has no planar faces.")
         points = [item["point_mm"] for item in faces]
         spreads = [max(p[axis] for p in points) - min(p[axis] for p in points)
                    for axis in range(3)]
-        axis = spreads.index(max(spreads))
+        return faces, spreads.index(max(spreads))
+
+    def _end_faces(self):
+        """The two end caps of the beam, as planar-face indices."""
+        faces, axis = self._planar_faces()
         ends = sorted((item for item in faces if abs(item["normal"][axis]) > 0.9),
                       key=lambda item: item["point_mm"][axis])
         self.assertGreaterEqual(len(ends), 2, "The beam has no two end faces.")
         self.assertGreater(ends[-1]["point_mm"][axis] - ends[0]["point_mm"][axis], 0)
         return ends[0]["index"], ends[-1]["index"]
+
+    def _flange_face(self):
+        """Largest face normal to the beam axis: a transverse (bending) load face."""
+        faces, axis = self._planar_faces()
+        sideways = [item for item in faces if abs(item["normal"][axis]) < 0.1]
+        self.assertTrue(sideways, "The beam has no face normal to its axis.")
+        return max(sideways, key=lambda item: item["area_mm2"])["index"]
+
+    def _reference_axis(self, axis_index):
+        """Create a reference axis along the beam and return its feature name.
+
+        The plane pair is derived from the planes' own normals instead of a
+        hardcoded name mapping, because the standard planes of this template do
+        not follow the usual Front = XY convention.
+        """
+        normals = {}
+        for name in ("Front Plane", "Top Plane", "Right Plane"):
+            feature = com(self._document(), "FeatureByName", name)
+            plane = com(feature, "GetSpecificFeature2")
+            normals[name] = list(com(com(plane, "Transform"), "ArrayData"))[6:9]
+
+        def cross(first, second):
+            return (first[1] * second[2] - first[2] * second[1],
+                    first[2] * second[0] - first[0] * second[2],
+                    first[0] * second[1] - first[1] * second[0])
+
+        for first, second in (("Front Plane", "Top Plane"),
+                              ("Front Plane", "Right Plane"),
+                              ("Top Plane", "Right Plane")):
+            direction = cross(normals[first], normals[second])
+            if max(range(3), key=lambda index: abs(direction[index])) == axis_index:
+                result = create_reference_axis(self.automation, first, second)
+                self.assertTrue(result["success"], result["message"])
+                return result["data"]["feature_name"]
+        self.fail("No standard plane pair intersects along the beam axis.")
 
     def _study_with_loads(self, name):
         self.assertTrue(create_static_study(self.automation, name)["success"])
@@ -224,6 +265,65 @@ class LiveSimulationStaticTests(unittest.TestCase):
         self.assertEqual(0, result["data"]["run_error"])
         # The mesh is a real discretisation of the beam, not a stub.
         self.assertGreater(self._volume_mm3(), 0)
+
+    # -- bending load case --------------------------------------------------
+    def test_transverse_load_on_a_flange_gives_a_positive_bending_stress(self):
+        """A normal force on a face perpendicular to the axis bends the beam."""
+        self._beam()
+        fixed, _loaded = self._end_faces()
+        flange = self._flange_face()
+        self.assertTrue(create_static_study(self.automation, "MCP Bending")["success"])
+        fixture = apply_fixed_fixture(self.automation, [fixed], study="MCP Bending")
+        self.assertTrue(fixture["success"], fixture["message"])
+        force = apply_force_load(self.automation, [flange], 200.0, unit="kg",
+                                 study="MCP Bending")
+        self.assertTrue(force["success"], force["message"])
+        self.assertGreater(force["data"]["face_count"], 0)
+
+        analysis = run_analysis(self.automation, study="MCP Bending")
+        if not analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             analysis["data"].get("code"), analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+
+        result = get_stress_results(self.automation, study="MCP Bending")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertGreater(result["data"]["stress_max_mpa"], 0)
+
+    # -- torsion load case --------------------------------------------------
+    def test_torque_load_on_the_beam_solves_with_a_positive_stress(self):
+        """A torque about the beam axis twists the beam."""
+        self._beam()
+        _faces, axis = self._planar_faces()
+        axis_name = self._reference_axis(axis)
+        self.assertTrue(create_static_study(self.automation, "MCP Zasuk")["success"])
+        fixed, loaded = self._end_faces()
+        fixture = apply_fixed_fixture(self.automation, [fixed], study="MCP Zasuk")
+        self.assertTrue(fixture["success"], fixture["message"])
+
+        torque = apply_force_load(self.automation, [loaded], 500.0, unit="N*m",
+                                  load_type="torque", reference=axis_name,
+                                  study="MCP Zasuk")
+
+        self.assertTrue(torque["success"], torque["message"])
+        self.assertEqual("torque", torque["data"]["load_type"])
+        self.assertEqual(2, torque["data"]["force_type"])
+        self.assertEqual(500.0, torque["data"]["torque_nm"])
+        self.assertAlmostEqual(500.0, torque["data"]["read_back_nm"], places=6)
+        self.assertEqual(axis_name, torque["data"]["reference"])
+
+        analysis = run_analysis(self.automation, study="MCP Zasuk")
+        if not analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             analysis["data"].get("code"), analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+        self.assertEqual(0, analysis["data"]["run_error"])
+
+        result = get_stress_results(self.automation, study="MCP Zasuk")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertGreater(result["data"]["stress_max_mpa"], 0)
 
     # -- 5.6 ----------------------------------------------------------------
     def test_get_stress_results_returns_a_finite_positive_maximum(self):
