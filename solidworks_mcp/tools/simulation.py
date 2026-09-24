@@ -85,6 +85,13 @@ SW_SIM_PRESSURE_UNIT_NAMES = {
     0: "Pa", 1: "psi", 2: "kgf/cm2", 3: "N/mm2", 4: "ksi",
 }
 
+#: Spellings offered by the tool schema. The lookup case-folds, so both these
+#: and the lower-case table keys are accepted; a caller who writes "MPa" must
+#: not be turned away by the schema while the description says MPa.
+SW_SIM_PRESSURE_UNIT_SPELLINGS = [
+    "Pa", "kPa", "MPa", "N/mm2", "N/mm²", "bar", "kgf/cm2", "psi", "ksi",
+]
+
 #: Newton-metres per unit accepted by a torque load. A mass cannot be a torque
 #: without a lever arm, so only torque units are listed.
 SW_SIM_TORQUE_UNITS = {
@@ -635,7 +642,9 @@ def apply_force_load(sw, face_indices: List[int], magnitude: float,
             "type": "number", "exclusiveMinimum": 0,
             "description": "Pressure magnitude, interpreted with unit."},
         "unit": {
-            "type": "string", "enum": sorted(set(SW_SIM_PRESSURE_UNITS)),
+            "type": "string",
+            "enum": sorted(set(SW_SIM_PRESSURE_UNITS)
+                           | set(SW_SIM_PRESSURE_UNIT_SPELLINGS)),
             "description": ("Pa, kPa, MPa, N/mm2, bar, kgf/cm2, psi or ksi. "
                             "MPa and N/mm2 are the same unit. Default MPa.")},
         "study": {"type": "string",

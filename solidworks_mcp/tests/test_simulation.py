@@ -839,6 +839,27 @@ class PressureLoadTests(unittest.TestCase):
         self.assertEqual("PRESSURE_UNIT_UNSUPPORTED", result["data"]["code"])
         self.assertEqual(7, result["data"]["unit_index"])
 
+    def test_schema_accepts_the_natural_unit_spellings(self):
+        schema = {item.name: item for item in registered_tools()}[
+            "apply_pressure_load"].inputSchema
+        choices = schema["properties"]["unit"]["enum"]
+        # The description says "MPa", so the schema must not reject it; the
+        # lower-case table keys stay accepted as well.
+        for spelling in ("Pa", "kPa", "MPa", "N/mm2", "bar", "kgf/cm2", "psi",
+                         "ksi", "pa", "kpa", "mpa", "n/mm2"):
+            self.assertIn(spelling, choices)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_natural_spelling_reaches_the_add_in(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = apply_pressure_load(automation, [4], 0.02, unit="MPa")
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("mpa", result["data"]["unit"])
+        self.assertAlmostEqual(20000.0, result["data"]["pressure_pascal"], places=6)
+
     def test_unknown_pressure_unit_is_rejected_before_com(self):
         automation = SimulationAutomation()
 
