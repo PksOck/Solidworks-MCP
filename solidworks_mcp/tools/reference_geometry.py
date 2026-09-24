@@ -5,7 +5,7 @@ import math
 import pythoncom
 import win32com.client
 
-from ..comutil import com
+from ..comutil import com, set_com
 from ..constants import SwErrors
 from ..core.policy import OperationClass
 from ..registry import tool
@@ -13,6 +13,36 @@ from ..registry import tool
 
 SW_REF_PLANE_DISTANCE = 8
 SW_REF_PLANE_DISTANCE_REVERSED = 264
+
+#: Degrees -> radians, for the coordinate-system rotation parameters.
+_DEGREES_TO_RADIANS = math.pi / 180.0
+
+
+def _rotation_matrix(x: float, y: float, z: float):
+    """Return Rx(x) @ Ry(y) @ Rz(z), the rotation SW applies to a numeric CS."""
+    cx, sx = math.cos(x), math.sin(x)
+    cy, sy = math.cos(y), math.sin(y)
+    cz, sz = math.cos(z), math.sin(z)
+    return (
+        (cy * cz, -cy * sz, sy),
+        (sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy),
+        (-cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy),
+    )
+
+
+def _matmul(a, b):
+    return tuple(
+        tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+        for i in range(3)
+    )
+
+
+def _matvec(a, v):
+    return tuple(sum(a[i][k] * v[k] for k in range(3)) for i in range(3))
+
+
+def _transpose(a):
+    return tuple(tuple(a[j][i] for j in range(3)) for i in range(3))
 
 
 @tool(
@@ -172,3 +202,142 @@ def create_reference_plane(sw, base_plane: str, offset: float, unit: str = "mm",
             "next_step": "Call list_planes to read the generated plane name.",
         },
     )
+
+
+@tool(
+    name="create_coordinate_system",
+    description=(
+        "Create a named coordinate system at a numeric origin offset with an "
+        "optional XYZ rotation of the part axes."
+    ),
+    schema={"type": "object", "properties": {
+        "x_offset": {"type": "number", "default": 0},
+        "y_offset": {"type": "number", "default": 0},
+        "z_offset": {"type": "number", "default": 0},
+        "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
+        "rotate_x": {"type": "number", "default": 0},
+        "rotate_y": {"type": "number", "default": 0},
+        "rotate_z": {"type": "number", "default": 0},
+        "angle_unit": {"type": "string", "enum": ["deg", "rad"], "default": "deg"},
+        "name": {"type": "string", "minLength": 1,
+                 "description": "Optional feature name; defaults to SolidWorks' own name."},
+    }},
+    operation_class=OperationClass.MUTATE,
+)
+def create_coordinate_system(sw, x_offset: float = 0.0, y_offset: float = 0.0,
+                             z_offset: float = 0.0, unit: str = "mm",
+                             rotate_x: float = 0.0, rotate_y: float = 0.0,
+                             rotate_z: float = 0.0, angle_unit: str = "deg",
+                             name: str | None = None) -> dict:
+    offsets = (x_offset, y_offset, z_offset)
+    angles = (rotate_x, rotate_y, rotate_z)
+    if (
+        any(isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) for value in offsets + angles)
+        or angle_unit not in ("deg", "rad")
+        or (name is not None and (not isinstance(name, str) or not name.strip()))
+    ):
+        return sw._result(
+            False,
+            "Offsets and rotations must be finite numbers, angle_unit must be "
+            "deg or rad, and name must be a non-empty string.",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED"},
+        )
+
+    try:
+        offsets_m = tuple(sw._units.to_meters(float(value), unit) for value in offsets)
+    except (KeyError, TypeError, ValueError) as conversion_error:
+        return sw._result(
+            False,
+            f"Invalid coordinate-system unit or offset: {conversion_error}",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED"},
+        )
+
+    angle_factor = _DEGREES_TO_RADIANS if angle_unit == "deg" else 1.0
+    angles_rad = tuple(float(value) * angle_factor for value in angles)
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "A coordinate system requires a part.",
+                          SwErrors.swInvalidFileType)
+
+    def existing_coordinate_systems():
+        found = []
+        feature = com(document, "FirstFeature")
+        while feature is not None:
+            if com(feature, "GetTypeName2") == "CoordSys":
+                found.append(str(com(feature, "Name")))
+            feature = com(feature, "GetNextFeature")
+        return found
+
+    try:
+        before = existing_coordinate_systems()
+        if name is not None and name.strip() in before:
+            return sw._result(
+                False, f"A coordinate system named {name.strip()} already exists.",
+                SwErrors.swInvalidInput, {"code": "NAME_IN_USE"},
+            )
+
+        # SolidWorks interprets DeltaX/Y/Z in the rotated frame, so pre-rotate
+        # the requested model-space origin by M^2 to land the origin exactly
+        # where the caller asked (verified live; see docs/api-findings.md).
+        rotation = _rotation_matrix(*angles_rad)
+        delta = _matvec(_matmul(rotation, rotation), offsets_m)
+
+        feature = com(
+            com(document, "FeatureManager"),
+            "CreateCoordinateSystemUsingNumericalValues",
+            True, delta[0], delta[1], delta[2],
+            any(angles_rad), angles_rad[0], angles_rad[1], angles_rad[2],
+        )
+        created = [item for item in existing_coordinate_systems() if item not in before]
+        if feature is None or not created:
+            return sw._result(False, "SolidWorks did not create a coordinate system.",
+                              SwErrors.swFeatureError)
+
+        feature_name = created[-1]
+        if name is not None and name.strip() != feature_name:
+            set_com(feature, "Name", name.strip())
+            renamed = str(com(feature, "Name"))
+            if renamed != name.strip():
+                return sw._result(
+                    False, "SolidWorks did not accept the requested name.",
+                    SwErrors.swFeatureError)
+            feature_name = renamed
+
+        transform = com(document, "GetCoordinateSystemXformByName", feature_name)
+        if transform is None or len(transform) < 12:
+            return sw._result(
+                False, "Could not read back the coordinate-system transform.",
+                SwErrors.swFeatureError)
+        values = [float(value) for value in transform]
+        rotation_read = (tuple(values[0:3]), tuple(values[3:6]), tuple(values[6:9]))
+        translation = tuple(values[9:12])
+        origin_m = tuple(-value for value in _matvec(_transpose(rotation_read), translation))
+        axes = rotation_read  # rows are the coordinate-system axes in model space
+        factor = sw._units.to_meters(1.0, unit)
+        origin = tuple(value / factor for value in origin_m)
+
+        return sw._result(
+            True,
+            f"Created coordinate system {feature_name}.",
+            data={
+                "feature_name": feature_name,
+                "origin": [round(value, 9) for value in origin],
+                "origin_m": [round(value, 9) for value in origin_m],
+                "unit": unit,
+                "axes": [[round(value, 9) for value in axis] for axis in axes],
+                "transform": [round(value, 12) for value in values],
+                "requested_offsets": list(offsets),
+                "requested_angles_rad": list(angles_rad),
+                "angle_unit": angle_unit,
+                "next_step": "Use the returned axes/origin as a reference frame.",
+            },
+        )
+    except Exception as create_error:
+        return sw._result(False, f"Coordinate system creation failed: {create_error}",
+                          SwErrors.swFeatureError)

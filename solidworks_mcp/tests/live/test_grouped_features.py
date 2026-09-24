@@ -23,9 +23,43 @@ from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.export import list_planar_faces
 from solidworks_mcp.tools.material import apply_material
 from solidworks_mcp.tools.properties import set_custom_property
-from solidworks_mcp.tools.reference_geometry import create_reference_axis, create_reference_plane
+from solidworks_mcp.tools.reference_geometry import (
+    create_coordinate_system,
+    create_reference_axis,
+    create_reference_plane,
+)
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.surface_features import cut_with_surface, planar_surface
+
+
+# Independent 3x3 matrix helpers so the coordinate-system checks below do not
+# reuse the production rotation code they are meant to verify.
+def _rx(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((1, 0, 0), (0, c, -s), (0, s, c))
+
+
+def _ry(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, 0, s), (0, 1, 0), (-s, 0, c))
+
+
+def _rz(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, -s, 0), (s, c, 0), (0, 0, 1))
+
+
+def _matmul3(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+                 for i in range(3))
+
+
+def _matvec3(a, v):
+    return tuple(sum(a[i][k] * v[k] for k in range(3)) for i in range(3))
+
+
+def _transpose3(a):
+    return tuple(tuple(a[j][i] for j in range(3)) for i in range(3))
 
 
 @unittest.skipUnless(os.environ.get("SW_MCP_LIVE_TESTS") == "1",
@@ -388,8 +422,85 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
         self.assertAlmostEqual(before_volume, self._total_volume(), delta=1)
         type(self).stage = 18
 
-    def test_19_save_and_close_shared_part(self):
+    def test_18b_coordinate_system_origin_and_orientation(self):
         self._require_stage(18)
+        before = self._total_volume()
+        result = create_coordinate_system(
+            self.automation, x_offset=10, y_offset=-5, z_offset=2, unit="mm",
+            rotate_z=30, name="MCP_Frame")
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("MCP_Frame", result["data"]["feature_name"])
+        self.assertAlmostEqual(10.0, result["data"]["origin"][0], places=4)
+        self.assertAlmostEqual(-5.0, result["data"]["origin"][1], places=4)
+        self.assertAlmostEqual(2.0, result["data"]["origin"][2], places=4)
+        angle = math.radians(30)
+        axes = result["data"]["axes"]
+        self.assertAlmostEqual(math.cos(angle), axes[0][0], places=6)
+        self.assertAlmostEqual(-math.sin(angle), axes[0][1], places=6)
+        self.assertAlmostEqual(math.sin(angle), axes[1][0], places=6)
+        self.assertAlmostEqual(math.cos(angle), axes[1][1], places=6)
+        self.assertAlmostEqual(1.0, axes[2][2], places=6)
+        determinant = (
+            axes[0][0] * (axes[1][1] * axes[2][2] - axes[1][2] * axes[2][1])
+            - axes[0][1] * (axes[1][0] * axes[2][2] - axes[1][2] * axes[2][0])
+            + axes[0][2] * (axes[1][0] * axes[2][1] - axes[1][1] * axes[2][0])
+        )
+        self.assertAlmostEqual(1.0, determinant, places=6)
+        rotated = create_coordinate_system(self.automation, rotate_z=90,
+                                           name="MCP_Frame_Rot")
+        self.assertTrue(rotated["success"], rotated["message"])
+        for value in rotated["data"]["origin"]:
+            self.assertAlmostEqual(0.0, value, places=4)
+        self.assertAlmostEqual(before, self._total_volume(), delta=0.01)
+        type(self).stage = 19
+
+    def test_18c_coordinate_system_combined_rotation_and_offset(self):
+        self._require_stage(19)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        before = self._total_volume()
+        offsets = (7.0, -3.0, 11.0)
+        angles_deg = (20.0, -35.0, 50.0)
+        angles = tuple(math.radians(value) for value in angles_deg)
+
+        # Independent expectation: SolidWorks applies Rx @ Ry @ Rz to the part
+        # axes. Assembled here, not via the production helper.
+        expected = _matmul3(_matmul3(_rx(angles[0]), _ry(angles[1])), _rz(angles[2]))
+
+        result = create_coordinate_system(
+            self.automation, x_offset=offsets[0], y_offset=offsets[1],
+            z_offset=offsets[2], unit="mm",
+            rotate_x=angles_deg[0], rotate_y=angles_deg[1], rotate_z=angles_deg[2],
+            name="MCP_Frame_Combined")
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("MCP_Frame_Combined", result["data"]["feature_name"])
+
+        # Read the transform straight from COM instead of trusting the helper.
+        transform = com(part, "GetCoordinateSystemXformByName", "MCP_Frame_Combined")
+        self.assertIsNotNone(transform)
+        values = [float(value) for value in transform]
+        axes = [values[0:3], values[3:6], values[6:9]]
+        translation = values[9:12]
+        for row, expected_row in zip(axes, expected):
+            for value, expected_value in zip(row, expected_row):
+                self.assertAlmostEqual(expected_value, value, places=6)
+
+        # Origin from the raw transform: O = -M^T @ t, independent of the helper.
+        origin_m = [-value for value in _matvec3(_transpose3(axes), translation)]
+        for value, offset in zip(origin_m, offsets):
+            self.assertAlmostEqual(offset / 1000.0, value, places=9)
+        # The helper's reported origin/axes must match the same expectation.
+        for value, offset in zip(result["data"]["origin"], offsets):
+            self.assertAlmostEqual(offset, value, places=6)
+        for row, expected_row in zip(result["data"]["axes"], expected):
+            for value, expected_value in zip(row, expected_row):
+                self.assertAlmostEqual(expected_value, value, places=6)
+
+        self.assertAlmostEqual(before, self._total_volume(), delta=0.01)
+        type(self).stage = 20
+
+    def test_19_save_and_close_shared_part(self):
+        self._require_stage(20)
         saved = save_document(self.automation, path=str(self.path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(self.path.stat().st_size, 0)
