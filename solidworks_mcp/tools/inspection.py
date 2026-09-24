@@ -37,6 +37,12 @@ def _component_document_type(path: str | None) -> str:
         "depth": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4},
         "cursor": {"type": "string"},
         "page_size": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+        "component_mode": {
+            "type": "string", "enum": ["fast", "detailed"], "default": "detailed",
+            "description": ("Traversal mode for the assembly components: 'fast' "
+                            "reads only name and path and skips leaf parts "
+                            "(much cheaper on large assemblies, but instances "
+                            "then carry no transform or suppression state).")},
     }, "required": []},
     operation_class=OperationClass.READ,
 )
@@ -46,6 +52,7 @@ def inspect_document(
     depth: int = 4,
     cursor: str | None = None,
     page_size: int = 100,
+    component_mode: str = "detailed",
 ) -> dict:
     """Return a read-only project snapshot or resume a stored snapshot page."""
     requested = tuple(sections or ("summary", "assembly", "dependencies"))
@@ -53,6 +60,11 @@ def inspect_document(
     if unknown:
         return sw._result(
             False, f"Unknown inspection sections: {', '.join(unknown)}",
+            SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"},
+        )
+    if component_mode not in ("fast", "detailed"):
+        return sw._result(
+            False, "component_mode must be 'fast' or 'detailed'.",
             SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"},
         )
     if not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 500:
@@ -195,7 +207,7 @@ def inspect_document(
                 })
 
         if target.document_type == "assembly" and ({"assembly", "dependencies"} & set(requested)):
-            component_result = list_components(sw, depth=depth)
+            component_result = list_components(sw, depth=depth, mode=component_mode)
             if not component_result["success"]:
                 return component_result
             component_data = component_result["data"]

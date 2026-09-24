@@ -329,16 +329,37 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
 
 @tool(
     name="list_components",
-    description="List the components of the active assembly: name, path, fixed/floating state.",
+    description=(
+        "List the components of the active assembly. mode 'fast' reads only "
+        "name and path and never queries leaf parts, which keeps large "
+        "assemblies quick; mode 'detailed' also reads transforms, suppression "
+        "state, configuration and fixed/virtual flags."
+    ),
     schema={"type": "object", "properties": {
         "depth": {"type": "integer", "minimum": 1, "maximum": 32, "default": 32},
+        "mode": {
+            "type": "string", "enum": ["fast", "detailed"], "default": "detailed",
+            "description": ("fast: name + path only, leaves are not queried. "
+                            "detailed: every member, needed for transforms, "
+                            "suppression, configurations.")},
     }, "required": []},
     operation_class=OperationClass.READ,
 )
-def list_components(sw, depth: int = 32) -> dict:
-    """List all component instances of the active assembly recursively."""
+def list_components(sw, depth: int = 32, mode: str = "detailed") -> dict:
+    """
+    List all component instances of the active assembly recursively.
+
+    ``fast`` mode exists because every COM member access on an instance inside
+    a sub-assembly costs about 0.08 s in SolidWorks (a transform ~0.35 s), so
+    the cost is the number of calls, not the data. A part instance is a leaf:
+    fast mode recognises it by the ``.SLDPRT`` suffix of its referenced
+    document and performs no further calls on it at all.
+    """
     if not isinstance(depth, int) or isinstance(depth, bool) or not 1 <= depth <= 32:
         return sw._result(False, "depth must be an integer from 1 to 32.", SwErrors.swInvalidInput)
+    if mode not in ("fast", "detailed"):
+        return sw._result(False, "mode must be 'fast' or 'detailed'.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
     asm, err = _require_assembly(sw)
     if err:
         return err
@@ -346,6 +367,7 @@ def list_components(sw, depth: int = 32) -> dict:
     comps = []
     unresolved = []
     truncated = False
+    fast = mode == "fast"
 
     def optional_component_value(comp, member, instance_path):
         try:
@@ -373,45 +395,69 @@ def list_components(sw, depth: int = 32) -> dict:
         4: "internal_id_mismatch",
     }
 
+    def children_of(comp, instance_path):
+        try:
+            return com(comp, "GetChildren") or []
+        except Exception as error:
+            unresolved.append(f"{instance_path}: children unavailable ({error})")
+            return None
+
     def visit(comp, parent_path=None, level=1):
         nonlocal truncated
         name = com(comp, "Name2")
         instance_path = f"{parent_path}/{name}" if parent_path else name
-        suppression = optional_component_value(comp, "GetSuppression", instance_path)
         path = optional_component_value(comp, "GetPathName", instance_path)
-        virtual = optional_component_value(comp, "IsVirtual", instance_path)
-        comps.append({
-            "name": name,
-            "instance_path": instance_path,
-            "parent_path": parent_path,
-            "path": path or None,
-            "configuration": optional_component_value(
-                comp, "ReferencedConfiguration", instance_path),
-            "transform": transform_data(comp, instance_path),
-            "is_fixed": bool(optional_component_value(comp, "IsFixed", instance_path)),
-            "suppressed": suppression == 0 if suppression is not None else None,
-            "suppression_state": suppression_names.get(suppression, "unknown"),
-            "lightweight": suppression in {1, 3} if suppression is not None else None,
-            "virtual": bool(virtual) if virtual is not None else None,
-        })
-        try:
-            children = com(comp, "GetChildren") or []
-        except Exception as error:
-            unresolved.append(f"{instance_path}: children unavailable ({error})")
+        # An unresolved path may hide a sub-assembly, so only a path that names
+        # a part is a leaf; unknown paths are still descended into.
+        if not path:
+            is_subassembly = None
+        else:
+            is_subassembly = str(path).casefold().endswith(".sldasm")
+
+        if fast:
+            comps.append({
+                "name": name,
+                "instance_path": instance_path,
+                "parent_path": parent_path,
+                "path": path or None,
+                "is_subassembly": is_subassembly,
+            })
+        else:
+            suppression = optional_component_value(comp, "GetSuppression", instance_path)
+            virtual = optional_component_value(comp, "IsVirtual", instance_path)
+            comps.append({
+                "name": name,
+                "instance_path": instance_path,
+                "parent_path": parent_path,
+                "path": path or None,
+                "is_subassembly": is_subassembly,
+                "configuration": optional_component_value(
+                    comp, "ReferencedConfiguration", instance_path),
+                "transform": transform_data(comp, instance_path),
+                "is_fixed": bool(optional_component_value(comp, "IsFixed", instance_path)),
+                "suppressed": suppression == 0 if suppression is not None else None,
+                "suppression_state": suppression_names.get(suppression, "unknown"),
+                "lightweight": suppression in {1, 3} if suppression is not None else None,
+                "virtual": bool(virtual) if virtual is not None else None,
+            })
+
+        if fast and is_subassembly is False:
             return
         if level >= depth:
+            children = children_of(comp, instance_path)
             if children:
                 truncated = True
             return
-        for child in children:
+        for child in children_of(comp, instance_path) or []:
             visit(child, instance_path, level + 1)
 
     for component in com(asm, "GetComponents", True) or []:
         visit(component)
 
     return sw._result(
-        True, f"Found {len(comps)} component instances.",
+        True, f"Found {len(comps)} component instances ({mode}).",
         data={
+            "mode": mode,
             "components": comps,
             "coverage": {
                 "complete": not unresolved and not truncated,
