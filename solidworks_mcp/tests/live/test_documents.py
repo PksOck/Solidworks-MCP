@@ -35,7 +35,7 @@ from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
 from solidworks_mcp.tools.patterns import mirror_feature
 from solidworks_mcp.tools.reference_geometry import create_reference_plane
-from solidworks_mcp.tools.body_features import combine_bodies, delete_body, move_copy_body, scale_body
+from solidworks_mcp.tools.body_features import combine_bodies
 from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, filled_surface, knit_surface, loft_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, sweep_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
@@ -969,45 +969,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertNotIn(title, [d["title"] for d in
                          self.automation.list_open_documents()["data"]["documents"]])
 
-    def _two_disconnected_blocks(self):
-        self._new_part()
-        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
-        for left, right in ((-30, -10), (10, 30)):
-            self.assertTrue(self.automation.draw_rectangle(left, -10, right, 10, "mm")["success"])
-        extruded = self.automation.extrude_sketch(10, False, "mm")
-        self.assertTrue(extruded["success"], extruded["message"])
-        part, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        self.assertEqual(2, len(com(part, "GetBodies2", 0, True) or []))
-        self.assertAlmostEqual(8000, self._total_volume_mm3(), delta=0.1)
-        return part
-
-    def _verify_delete_body_saved_and_closed(self, keep_only):
-        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
-        label = "keep" if keep_only else "delete"
-        part_path = root / f"mcp_live_{label}_body_{uuid4().hex}.SLDPRT"
-        part = self._two_disconnected_blocks()
-        result = delete_body(self.automation, 0, keep_only=keep_only)
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual(1, len(com(part, "GetBodies2", 0, True) or []))
-        self.assertAlmostEqual(4000, self._total_volume_mm3(), delta=0.5)
-        saved = save_document(self.automation, path=str(part_path))
-        self.assertTrue(saved["success"], saved["message"])
-        self.assertGreater(part_path.stat().st_size, 0)
-        part, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        title = str(com(part, "GetTitle"))
-        self.created_titles.append(title)
-        self.automation.app.CloseDoc(title)
-        self.assertNotIn(title, [d["title"] for d in
-                         self.automation.list_open_documents()["data"]["documents"]])
-
-    def test_delete_selected_body_saves_and_closes(self):
-        self._verify_delete_body_saved_and_closed(False)
-
-    def test_keep_only_selected_body_saves_and_closes(self):
-        self._verify_delete_body_saved_and_closed(True)
-
     def test_extend_planar_sheet_edge_saves_and_closes(self):
         root = Path(self.automation._path_policy.output_roots[0]) / "saved"
         part_path = root / f"mcp_live_extend_surface_{uuid4().hex}.SLDPRT"
@@ -1036,40 +997,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.automation.app.CloseDoc(title)
         self.assertNotIn(title, [d["title"] for d in
                          self.automation.list_open_documents()["data"]["documents"]])
-
-    def _verify_moved_or_copied_body_saves_and_closes(self, make_copy):
-        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
-        label = "copy" if make_copy else "move"
-        part_path = root / f"mcp_live_{label}_body_{uuid4().hex}.SLDPRT"
-        self._new_part()
-        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
-        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
-        extruded = self.automation.extrude_sketch(10, False, "mm")
-        self.assertTrue(extruded["success"], extruded["message"])
-        result = move_copy_body(self.automation, 0, 30, 0, 0, copy=make_copy)
-        self.assertTrue(result["success"], f'{result["message"]} {result.get("data")}')
-        part, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        self.assertEqual(2 if make_copy else 1, len(com(part, "GetBodies2", 0, True) or []))
-        self.assertAlmostEqual(8000 if make_copy else 4000,
-                               self._total_volume_mm3(), delta=1)
-        before_box = result["data"]["box_before_m"]
-        after_box = result["data"]["box_after_m"]
-        self.assertAlmostEqual(0.03, after_box[0] - before_box[0], delta=0.0001)
-        saved = save_document(self.automation, path=str(part_path))
-        self.assertTrue(saved["success"], saved["message"])
-        self.assertGreater(part_path.stat().st_size, 0)
-        title = str(com(part, "GetTitle"))
-        self.created_titles.append(title)
-        self.automation.app.CloseDoc(title)
-        self.assertNotIn(title, [d["title"] for d in
-                         self.automation.list_open_documents()["data"]["documents"]])
-
-    def test_move_body_translation_saves_and_closes(self):
-        self._verify_moved_or_copied_body_saves_and_closes(False)
-
-    def test_copy_body_translation_saves_and_closes(self):
-        self._verify_moved_or_copied_body_saves_and_closes(True)
 
     def test_ruled_sheet_from_planar_edge_saves_and_closes(self):
         root = Path(self.automation._path_policy.output_roots[0]) / "saved"
@@ -1215,39 +1142,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertEqual(1, len(com(part, "GetBodies2", 1, True) or []))
         self.assertAlmostEqual(900, result["data"]["area_after_mm2"], delta=1)
         self.assertAlmostEqual(0, self._total_volume_mm3(), delta=0.01)
-        saved = save_document(self.automation, path=str(part_path))
-        self.assertTrue(saved["success"], saved["message"])
-        self.assertGreater(part_path.stat().st_size, 0)
-        title = str(com(part, "GetTitle"))
-        self.created_titles.append(title)
-        self.automation.app.CloseDoc(title)
-        self.assertNotIn(title, [d["title"] for d in
-                         self.automation.list_open_documents()["data"]["documents"]])
-
-    def test_scale_body_doubles_dimensions_and_octuples_volume_saves_and_closes(self):
-        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
-        part_path = root / f"mcp_live_scale_body_{uuid4().hex}.SLDPRT"
-        self._new_part()
-        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
-        self.assertTrue(self.automation.draw_rectangle(0, 0, 10, 20, "mm")["success"])
-        self._close_sketch()
-        extruded = self.automation.extrude_sketch(30, False, "mm")
-        self.assertTrue(extruded["success"], extruded["message"])
-        part, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        original_body = (com(part, "GetBodies2", 0, True) or [])[0]
-        before_box = com(original_body, "GetBodyBox")
-        before_volume = self._total_volume_mm3()
-        self.assertAlmostEqual(6000, before_volume, delta=0.2)
-        result = scale_body(self.automation, 0, 2, origin="origin")
-        self.assertTrue(result["success"], result["message"])
-        self.assertAlmostEqual(before_volume * 8, self._total_volume_mm3(), delta=1)
-        after_body = (com(part, "GetBodies2", 0, True) or [])[0]
-        after_box = com(after_body, "GetBodyBox")
-        for axis in range(3):
-            self.assertAlmostEqual(
-                2 * (before_box[axis + 3] - before_box[axis]),
-                after_box[axis + 3] - after_box[axis], delta=0.0001)
         saved = save_document(self.automation, path=str(part_path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(part_path.stat().st_size, 0)

@@ -14,6 +14,7 @@ from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.tools.advanced_features import hole_wizard
 from solidworks_mcp.tools.appearance import set_appearance
+from solidworks_mcp.tools.body_features import delete_body, move_copy_body, scale_body
 from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.export import list_planar_faces
@@ -25,7 +26,7 @@ from solidworks_mcp.tools.saving import save_document
 @unittest.skipUnless(os.environ.get("SW_MCP_LIVE_TESTS") == "1",
                      "Set SW_MCP_LIVE_TESTS=1 to run SolidWorks COM tests.")
 class LiveGroupedSingleBodyTests(unittest.TestCase):
-    """One 100 x 100 x 40 mm body, with non-overlapping edge treatments."""
+    """One part, initially a 100 x 100 x 40 mm body, then controlled copies."""
 
     @classmethod
     def setUpClass(cls):
@@ -79,6 +80,15 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
         bodies = com(part, "GetBodies2", 0, True) or []
         self.assertEqual(1, len(bodies))
         return com(bodies[0], "GetMassProperties", 0.0)[3] * 1e9
+
+    def _bodies(self):
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        return com(part, "GetBodies2", 0, True) or []
+
+    def _total_volume(self):
+        return sum(com(body, "GetMassProperties", 0.0)[3] * 1e9
+                   for body in self._bodies())
 
     def _require_stage(self, stage):
         if type(self).stage != stage:
@@ -184,8 +194,89 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
         self.assertAlmostEqual(before, self._volume(), delta=0.01)
         type(self).stage = 8
 
-    def test_09_save_and_close_shared_part(self):
+    def test_09_move_body_preserves_volume(self):
         self._require_stage(8)
+        before = self._volume()
+        result = move_copy_body(self.automation, 0, 0, 150, 0)
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(result["data"]["box_after_m"][1] -
+                               result["data"]["box_before_m"][1], .15, delta=1e-4)
+        self.assertAlmostEqual(before, self._volume(), delta=1)
+        type(self).stage = 9
+
+    def test_10_copy_body_adds_one_body(self):
+        self._require_stage(9)
+        before = self._volume()
+        result = move_copy_body(self.automation, 0, 0, 150, 0, copy=True)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(2, len(self._bodies()))
+        self.assertAlmostEqual(before * 2, self._total_volume(), delta=1)
+        self.assertAlmostEqual(result["data"]["box_after_m"][1] -
+                               result["data"]["box_before_m"][1], .15, delta=1e-4)
+        type(self).stage = 10
+
+    def test_11_scale_one_body_octuples_its_volume(self):
+        self._require_stage(10)
+        bodies = self._bodies()
+        before = [com(body, "GetMassProperties", 0.0)[3] * 1e9 for body in bodies]
+        # Choose the body at y=150 mm, not the copied one at y=300 mm.
+        index = min(range(len(bodies)), key=lambda i: com(bodies[i], "GetBodyBox")[1])
+        box = com(bodies[index], "GetBodyBox")
+        result = scale_body(self.automation, index, 2, origin="centroid")
+        self.assertTrue(result["success"], result["message"])
+        after = [com(body, "GetMassProperties", 0.0)[3] * 1e9 for body in self._bodies()]
+        self.assertEqual(2, len(after))
+        self.assertAlmostEqual(sum(after), sum(before) + before[index] * 7, delta=1)
+        scaled = next(body for body in self._bodies()
+                      if abs(com(body, "GetMassProperties", 0.0)[3] * 1e9 - before[index] * 8) < 1)
+        scaled_box = com(scaled, "GetBodyBox")
+        for axis in range(3):
+            self.assertAlmostEqual(scaled_box[axis + 3] - scaled_box[axis],
+                                   2 * (box[axis + 3] - box[axis]), delta=1e-4)
+        type(self).stage = 11
+
+    def test_12_delete_only_selected_body(self):
+        self._require_stage(11)
+        bodies = self._bodies()
+        before = self._total_volume()
+        index = max(range(len(bodies)), key=lambda i: com(bodies[i], "GetMassProperties", 0.0)[3])
+        removed = com(bodies[index], "GetMassProperties", 0.0)[3] * 1e9
+        result = delete_body(self.automation, index)
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(self._volume(), before - removed, delta=1)
+        type(self).stage = 12
+
+    def test_13_keep_only_selected_body(self):
+        self._require_stage(12)
+        result = move_copy_body(self.automation, 0, 0, 150, 0, copy=True)
+        self.assertTrue(result["success"], result["message"])
+        bodies = self._bodies()
+        self.assertEqual(2, len(bodies))
+        before = self._total_volume()
+        index = max(range(len(bodies)), key=lambda i: com(bodies[i], "GetBodyBox")[1])
+        kept = com(bodies[index], "GetMassProperties", 0.0)[3] * 1e9
+        result = delete_body(self.automation, index, keep_only=True)
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(self._volume(), kept, delta=1)
+        self.assertAlmostEqual(before, kept * 2, delta=1)
+        type(self).stage = 13
+
+    def test_14_scale_body_about_origin_octuples_volume(self):
+        self._require_stage(13)
+        body = self._bodies()[0]
+        before_box = com(body, "GetBodyBox")
+        before = self._volume()
+        result = scale_body(self.automation, 0, 2, origin="origin")
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(self._volume(), before * 8, delta=1)
+        after_box = com(self._bodies()[0], "GetBodyBox")
+        for axis in range(3):
+            self.assertAlmostEqual(after_box[axis + 3] - after_box[axis],
+                                   2 * (before_box[axis + 3] - before_box[axis]), delta=1e-4)
+        type(self).stage = 14
+
+    def test_15_save_and_close_shared_part(self):
+        self._require_stage(14)
         saved = save_document(self.automation, path=str(self.path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(self.path.stat().st_size, 0)
