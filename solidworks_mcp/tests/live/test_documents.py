@@ -18,7 +18,7 @@ from solidworks_mcp.tools.assembly import (
 )
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import (
-    boundary_boss, boundary_cut, draft_faces, loft_cut, loft_sketches, revolve_cut, rib, shell_feature, sweep_cut, sweep_sketch,
+    boundary_boss, boundary_cut, loft_cut, loft_sketches, revolve_cut, rib, shell_feature, sweep_cut, sweep_sketch,
 )
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.drawings import add_standard_3_view, insert_cut_list_table, list_drawing_views
@@ -910,18 +910,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertTrue(result["success"], result["message"])
         self.assertAlmostEqual(9333.333, before - self._total_volume_mm3(), delta=1.0)
 
-    def _draft_box_sides(self, flip):
-        before = self._box_100x100x40()
-        faces = list_planar_faces(self.automation)["data"]["faces"]
-        caps = [face["index"] for face in faces if round(face["area_mm2"]) == 10000]
-        sides = [face["index"] for face in faces if round(face["area_mm2"]) == 4000]
-        self.assertEqual((2, 4), (len(caps), len(sides)))
-
-        result = draft_faces(self.automation, 5, caps[0], sides, flip=flip)
-
-        self.assertTrue(result["success"], result["message"])
-        return before, self._total_volume_mm3()
-
     def test_polygon_radius_is_the_circumscribed_vertex_radius_without_saving(self):
         self._new_part()
         self.assertTrue(self.automation.create_sketch("Top", exact_geometry=True)["success"])
@@ -954,20 +942,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertIn("create_sketch_on_plane", result["message"])
-
-    def test_draft_tilts_the_four_sides_outward_without_saving(self):
-        _, after = self._draft_box_sides(flip=False)
-
-        slope = 2 * math.tan(math.radians(5))
-        expected = 40 * 100 ** 2 + 40 ** 2 * 100 * slope + slope ** 2 * 40 ** 3 / 3
-        self.assertAlmostEqual(expected, after, delta=1.0)
-
-    def test_flipped_draft_tilts_the_four_sides_inward_without_saving(self):
-        _, after = self._draft_box_sides(flip=True)
-
-        slope = 2 * math.tan(math.radians(5))
-        expected = 40 * 100 ** 2 - 40 ** 2 * 100 * slope + slope ** 2 * 40 ** 3 / 3
-        self.assertAlmostEqual(expected, after, delta=1.0)
 
     @staticmethod
     def _dxf_line_points(path):

@@ -15,12 +15,13 @@ import win32com.client
 
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
-from solidworks_mcp.tools.advanced_features import hole_wizard
+from solidworks_mcp.tools.advanced_features import draft_faces, hole_wizard
 from solidworks_mcp.tools.appearance import set_appearance
 from solidworks_mcp.tools.body_features import delete_body, move_copy_body, scale_body
 from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.export import list_planar_faces
+from solidworks_mcp.tools.material import apply_material
 from solidworks_mcp.tools.properties import set_custom_property
 from solidworks_mcp.tools.reference_geometry import create_reference_axis, create_reference_plane
 from solidworks_mcp.tools.saving import save_document
@@ -326,13 +327,73 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
                                4 * type(self).hole_removed, delta=1)
         type(self).stage = 15
 
-    def test_16_save_and_close_shared_part(self):
+    def _draft_remote_box(self, center, flip):
+        initial_count = len(self._bodies())
+        sketch = self.automation.create_sketch("Front", exact_geometry=True)
+        self.assertTrue(sketch["success"], sketch["message"])
+        rectangle = self.automation.draw_rectangle(center - 50, -50,
+                                                   center + 50, 50, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        extruded = self.automation.extrude_sketch(40, False, "mm")
+        self.assertTrue(extruded["success"], extruded["message"])
+        bodies = self._bodies()
+        self.assertEqual(initial_count + 1, len(bodies))
+        index = next(i for i, body in enumerate(bodies)
+                     if abs(com(body, "GetBodyBox")[1] - (center - 50) / 1000) < .001)
+        faces = list_planar_faces(self.automation)
+        self.assertTrue(faces["success"], faces["message"])
+        selected = [face for face in faces["data"]["faces"] if face["body_index"] == index]
+        caps = [face["index"] for face in selected if round(face["area_mm2"]) == 10000]
+        sides = [face["index"] for face in selected if round(face["area_mm2"]) == 4000]
+        self.assertEqual((2, 4), (len(caps), len(sides)))
+        before = self._total_volume()
+        result = draft_faces(self.automation, 5, caps[0], sides, flip=flip)
+        self.assertTrue(result["success"], result["message"])
+        slope = 2 * math.tan(math.radians(5))
+        expected = (40 * 100 ** 2 + (-1 if flip else 1) * 40 ** 2 * 100 * slope
+                    + slope ** 2 * 40 ** 3 / 3)
+        self.assertAlmostEqual(expected - 400000,
+                               self._total_volume() - before, delta=1)
+
+    def test_16_draft_remote_box_outward(self):
         self._require_stage(15)
+        self._draft_remote_box(1200, flip=False)
+        type(self).stage = 16
+
+    def test_17_draft_remote_box_inward(self):
+        self._require_stage(16)
+        self._draft_remote_box(1500, flip=True)
+        type(self).stage = 17
+
+    def test_18_material_sets_density_and_mass(self):
+        self._require_stage(17)
+        database = Path(r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\english"
+                        r"\sldmaterials\solidworks materials.sldmat")
+        self.assertTrue(database.is_file(), f"Required material database missing: {database}")
+        before_volume = self._total_volume()
+        result = apply_material(self.automation, "Plain Carbon Steel", str(database))
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("Plain Carbon Steel", result["data"]["name"])
+        self.assertAlmostEqual(7800, result["data"]["density_kg_m3"], delta=1)
+        self.assertAlmostEqual(result["data"]["mass_after_kg"],
+                               result["data"]["volume_m3"] * 7800, delta=1e-5)
+        self.assertAlmostEqual(before_volume, self._total_volume(), delta=1)
+        # Applying a library material replaces the document-level appearance.
+        # Restore the tested RGB so the saved document verifies both properties.
+        appearance = set_appearance(self.automation, 0.2, 0.5, 0.8)
+        self.assertTrue(appearance["success"], appearance["message"])
+        self.assertAlmostEqual(before_volume, self._total_volume(), delta=1)
+        type(self).stage = 18
+
+    def test_19_save_and_close_shared_part(self):
+        self._require_stage(18)
         saved = save_document(self.automation, path=str(self.path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(self.path.stat().st_size, 0)
         part, error = self.automation.get_active_doc()
         self.assertIsNone(error)
+        self.assertAlmostEqual(com(part, "GetMassProperties", 0.0)[5] /
+                               com(part, "GetMassProperties", 0.0)[3], 7800, delta=1)
         self.assertTrue(all(abs(com(part, "MaterialPropertyValues")[i] - value) < 1 / 255 + 1e-6
                             for i, value in enumerate((0.2, 0.5, 0.8))))
         title = str(com(part, "GetTitle"))
