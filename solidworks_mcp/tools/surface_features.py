@@ -605,3 +605,66 @@ def ruled_surface(sw, sheet_index: int, edge_index: int, length: float,
                           SwErrors.swFeatureError)
     finally:
         com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="loft_surface",
+    description="Create an open lofted sheet through two ordered 2D profile sketches.",
+    schema={"type": "object", "properties": {
+        "profile_sketches": {"type": "array", "items": {"type": "string", "minLength": 1},
+                             "minItems": 2, "maxItems": 2},
+    }, "required": ["profile_sketches"]},
+    operation_class=OperationClass.MUTATE,
+)
+def loft_surface(sw, profile_sketches: list[str]) -> dict:
+    if (not isinstance(profile_sketches, list) or len(profile_sketches) != 2
+            or any(not isinstance(name, str) or not name.strip()
+                   for name in profile_sketches)
+            or profile_sketches[0] == profile_sketches[1]):
+        return sw._result(False, "Supply two distinct sketch names.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "Surface loft requires a part.", SwErrors.swInvalidFileType)
+    profiles = [_find_feature(document, name) for name in profile_sketches]
+    if any(feature is None or com(feature, "GetTypeName2") != "ProfileFeature"
+           for feature in profiles):
+        return sw._result(False, "At least one 2D profile sketch was not found.",
+                          SwErrors.swSelectionError)
+    try:
+        before = com(document, "GetBodies2", 1, True) or []
+        signatures_before, retained = _feature_signatures(document)
+        del retained
+        com(document, "ClearSelection2", True)
+        for index, profile in enumerate(profiles):
+            if not com(profile, "Select2", index > 0, 1):
+                return sw._result(False, "Could not select loft profile.",
+                                  SwErrors.swSelectionError)
+        # SW2025 IModelDoc2.InsertLoftRefSurface(Closed,KeepTangency,ForceNonRational)
+        com(document, "InsertLoftRefSurface", False, False, False)
+        signatures_after, retained = _feature_signatures(document)
+        del retained
+        created = [name for name, kind in signatures_after
+                   if (name, kind) not in signatures_before and kind == "BlendRefSurface"]
+        feature = _find_feature(document, created[-1]) if created else None
+        after = com(document, "GetBodies2", 1, True) or []
+        area_after = sum(com(face, "GetArea") * 1e6 for body in after
+                         for face in (com(body, "GetFaces") or []))
+        if (feature is None or len(after) <= len(before) or area_after <= 0
+                or com(feature, "GetErrorCode")):
+            return sw._result(False, "Surface loft did not create a valid sheet.",
+                              SwErrors.swFeatureError, {"sheets_before": len(before),
+                                                       "sheets_after": len(after),
+                                                       "area_after_mm2": area_after})
+        return sw._result(True, f"Created surface loft {com(feature, 'Name')}.", data={
+            "feature_name": str(com(feature, "Name")),
+            "profile_sketches": profile_sketches, "sheets_before": len(before),
+            "sheets_after": len(after), "area_after_mm2": area_after,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Surface loft failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)

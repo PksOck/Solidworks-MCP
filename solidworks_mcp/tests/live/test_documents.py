@@ -40,7 +40,7 @@ from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.appearance import set_appearance
 from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.body_features import combine_bodies, delete_body, move_copy_body, scale_body
-from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, knit_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, thicken_surface
+from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, knit_surface, loft_surface, offset_surface, planar_surface, revolve_surface, ruled_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
 
@@ -1309,6 +1309,36 @@ class LiveDocumentTargetTests(unittest.TestCase):
 
     def test_combine_common_saves_and_closes(self):
         self._verify_combine_saved_and_closed("common", 2000)
+
+    def test_loft_surface_between_square_profiles_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_loft_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        first = self._last_sketch_name(part)
+        plane = create_reference_plane(self.automation, "Front Plane", 30, "mm")
+        self.assertTrue(plane["success"], plane["message"])
+        self._sketch_on_plane("Plane1")
+        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
+        self._close_sketch()
+        second = self._last_sketch_name(part)
+        result = loft_surface(self.automation, [first, second])
+        self.assertTrue(result["success"], f'{result["message"]}; {result.get("data")}; {self._top_level_feature_types()}')
+        self.assertEqual(1, len(com(part, "GetBodies2", 1, True) or []))
+        self.assertAlmostEqual(2400, result["data"]["area_after_mm2"], delta=1)
+        self.assertAlmostEqual(0, self._total_volume_mm3(), delta=0.01)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
 
     def test_scale_body_doubles_dimensions_and_octuples_volume_saves_and_closes(self):
         root = Path(self.automation._path_policy.output_roots[0]) / "saved"
