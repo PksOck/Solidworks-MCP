@@ -10,6 +10,9 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
+import pythoncom
+import win32com.client
+
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.tools.advanced_features import hole_wizard
@@ -19,8 +22,9 @@ from solidworks_mcp.tools.configurations import create_configuration
 from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.export import list_planar_faces
 from solidworks_mcp.tools.properties import set_custom_property
-from solidworks_mcp.tools.reference_geometry import create_reference_axis
+from solidworks_mcp.tools.reference_geometry import create_reference_axis, create_reference_plane
 from solidworks_mcp.tools.saving import save_document
+from solidworks_mcp.tools.surface_features import cut_with_surface, planar_surface
 
 
 @unittest.skipUnless(os.environ.get("SW_MCP_LIVE_TESTS") == "1",
@@ -94,6 +98,13 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
         if type(self).stage != stage:
             self.skipTest(f"Earlier operation did not reach checkpoint {stage}.")
 
+    def test_00_fillet_rejects_point_off_edge(self):
+        before = self._volume()
+        result = self.automation.fillet_edges(5, "mm", edge_points=[[20, 0, 0]])
+        self.assertFalse(result["success"])
+        self.assertEqual("SELECTION_EMPTY", result["data"]["code"])
+        self.assertAlmostEqual(before, self._volume(), delta=.01)
+
     def test_01_fillet_removes_expected_volume(self):
         before = self._volume()
         self.assertAlmostEqual(400000, before, delta=0.1)
@@ -124,7 +135,9 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
         self.assertIsNotNone(cap, "Extrusion cap not found after edge treatments.")
         result = hole_wizard(self.automation, cap["index"], [40, 0, 0], 6, 8)
         self.assertTrue(result["success"], result["message"])
-        self.assertLess(self._volume(), before - 10)
+        after = self._volume()
+        self.assertLess(after, before - 10)
+        type(self).hole_removed = before - after
         type(self).stage = 3
 
     def test_04_reference_axis_does_not_change_volume(self):
@@ -275,8 +288,46 @@ class LiveGroupedSingleBodyTests(unittest.TestCase):
                                    2 * (before_box[axis + 3] - before_box[axis]), delta=1e-4)
         type(self).stage = 14
 
-    def test_15_save_and_close_shared_part(self):
+    def test_15_cut_with_surface_halves_remaining_body(self):
         self._require_stage(14)
+        before = self._volume()
+        box = com(self._bodies()[0], "GetBodyBox")
+        middle_x = (box[0] + box[3]) * 500  # meters to millimeters / 2
+        plane = create_reference_plane(self.automation, "Front Plane", middle_x, "mm")
+        self.assertTrue(plane["success"], plane["message"])
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        empty = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        com(part, "ClearSelection2", True)
+        selected = com(com(part, "Extension"), "SelectByID2", "Plane1", "PLANE",
+                       0., 0., 0., False, 0, empty, 0)
+        self.assertTrue(selected)
+        com(part, "InsertSketch2", True)
+        rectangle = self.automation.draw_rectangle(box[1] * 1000 - 10,
+                                                   box[2] * 1000 - 10,
+                                                   box[4] * 1000 + 10,
+                                                   box[5] * 1000 + 10, "mm")
+        self.assertTrue(rectangle["success"], rectangle["message"])
+        com(part, "InsertSketch2", True)
+        last = None
+        feature = com(part, "FirstFeature")
+        while feature is not None:
+            if com(feature, "GetTypeName2") == "ProfileFeature":
+                last = str(com(feature, "Name"))
+            feature = com(feature, "GetNextFeature")
+        self.assertIsNotNone(last)
+        surface = planar_surface(self.automation, last)
+        self.assertTrue(surface["success"], surface["message"])
+        cut = cut_with_surface(self.automation, surface["data"]["feature_name"])
+        self.assertTrue(cut["success"], cut["message"])
+        # The blind hole is on the far cap: two half-blocks differ by the
+        # hole's volume (scaled 2x in each of the three dimensions).
+        self.assertAlmostEqual(abs(self._volume() - before / 2),
+                               4 * type(self).hole_removed, delta=1)
+        type(self).stage = 15
+
+    def test_16_save_and_close_shared_part(self):
+        self._require_stage(15)
         saved = save_document(self.automation, path=str(self.path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(self.path.stat().st_size, 0)
