@@ -132,6 +132,12 @@ class LiveSimulationStaticTests(unittest.TestCase):
         self.assertTrue(force["success"], force["message"])
         return fixed, loaded
 
+    def _save(self, path):
+        """Save As renames the document, so the open title follows the path."""
+        saved = save_document(self.automation, path=str(path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.created_titles[-1] = path.stem
+
     # -- 5.1 ----------------------------------------------------------------
     def test_create_static_study_converts_beam_bodies_and_verifies_the_study(self):
         document, feature, profile = self._beam()
@@ -148,8 +154,7 @@ class LiveSimulationStaticTests(unittest.TestCase):
                                 "The weldment study was not converted to solid bodies.")
 
         path = self.output_root / "saved" / f"mcp_live_sim_beam_{uuid4().hex}.SLDPRT"
-        saved = save_document(self.automation, path=str(path))
-        self.assertTrue(saved["success"], saved["message"])
+        self._save(path)
         self.assertGreater(path.stat().st_size, 0)
 
     def _feature_types(self, document):
