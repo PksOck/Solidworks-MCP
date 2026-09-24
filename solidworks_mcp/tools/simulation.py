@@ -109,6 +109,12 @@ SW_SIM_LINEAR_UNIT_MM = 0
 #: swsLinearUnit_e index per unit accepted by ``get_displacement_results``.
 SW_SIM_LINEAR_UNITS = {"mm": 0, "cm": 1, "m": 2, "inch": 3}
 
+#: swsForceUnit_e index per unit accepted by ``get_reaction_results``.
+SW_SIM_REACTION_UNITS = {"N": 0, "lbf": 1, "kgf": 2}
+
+#: The moment half of the force unit pair reported by the reaction API.
+SW_SIM_REACTION_MOMENT_UNITS = {0: "N*m", 1: "lbf*in", 2: "kgf*cm"}
+
 #: swsDisplacementComponent_e names, used only to report what was read.
 SW_SIM_DISPLACEMENT_COMPONENTS = {
     0: "UX", 1: "UY", 2: "UZ", 3: "URES",
@@ -995,4 +1001,133 @@ def get_displacement_results(sw, study: Optional[str] = None, component: int = 3
         })
     except Exception as exc:
         return sw._result(False, f"Reading the displacement results failed: {exc}",
+                          SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})
+
+
+def _reaction_block(values: Sequence[float]) -> Dict[str, float]:
+    """The eight reaction values of one selection: F components then M."""
+    return {
+        "force_x": values[0], "force_y": values[1], "force_z": values[2],
+        "force_resultant": values[3],
+        "moment_x": values[4], "moment_y": values[5], "moment_z": values[6],
+        "moment_resultant": values[7],
+    }
+
+
+@tool(
+    name="get_reaction_results",
+    description=(
+        "Read the reaction force and moment the solved restraints report. "
+        "Pass face_indices (typically the restrained faces) to get the "
+        "reaction on those faces; without it only the whole-model total is "
+        "returned. A solved support must react exactly what was applied, so "
+        "this is the value-level check for a force or torque. Units: N, lbf "
+        "or kgf. The moment half is the add-in's nodal moment reaction and "
+        "stays zero for a solid mesh, whose nodes carry no rotational degree "
+        "of freedom; the physical moment reaction lives in the force "
+        "distribution, so verify moments through the force components."
+    ),
+    schema={"type": "object", "properties": {
+        "study": {"type": "string",
+                  "description": "Study name; defaults to the newest study."},
+        "face_indices": {
+            "type": "array", "items": {"type": "integer", "minimum": 0},
+            "description": ("Planar faces to report (e.g. the restrained "
+                            "faces); omit for the whole model only.")},
+        "unit": {
+            "type": "string", "enum": sorted(SW_SIM_REACTION_UNITS),
+            "description": "Force unit (swsForceUnit_e); default N."},
+        "step": {"type": "integer", "minimum": 1,
+                 "description": "Solution step number; default 1 for static studies."},
+    }, "required": []},
+    operation_class=OperationClass.READ,
+)
+def get_reaction_results(sw, study: Optional[str] = None, face_indices=None,
+                         unit: str = "N", step: int = 1) -> dict:
+    if not isinstance(step, int) or isinstance(step, bool) or step < 1:
+        return sw._result(False, "step must be an integer of at least 1.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if not isinstance(unit, str) or unit.strip() not in SW_SIM_REACTION_UNITS:
+        return sw._result(
+            False, "A force unit must be one of "
+                   + ", ".join(sorted(SW_SIM_REACTION_UNITS)) + ".",
+            SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED", "unit": unit})
+    unit_key = unit.strip()
+    unit_index = SW_SIM_REACTION_UNITS[unit_key]
+    selected_objects = _null_dispatch()
+    if face_indices is not None:
+        error = _check_indices(sw, face_indices)
+        if error:
+            return error
+        document, error = sw.get_active_doc()
+        if error:
+            return error
+        faces, error = _faces(sw, document, face_indices)
+        if error:
+            return error
+        selected_objects = _dispatch_array(faces)
+    model, error = _simulation_model(sw)
+    if error:
+        return error
+    target, error = _resolve_study(sw, model, study)
+    if error:
+        return error
+    try:
+        results = com(target, "Results")
+        if results is None:
+            return sw._result(False, "The study has no results object.",
+                              SwErrors.swSimulationError, {"code": "SIMULATION_NO_RESULTS"})
+        available = int(com(results, "GetMaximumAvailableSteps"))
+        if available < step:
+            return sw._result(
+                False, f"Step {step} is not available; the study has {available} step(s).",
+                SwErrors.swSimulationError,
+                {"code": "RESULTS_STEP_UNAVAILABLE", "available_steps": available})
+        errors = _int_byref()
+        selected = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None)
+        each = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_VARIANT, None)
+        # The add-in also returns the whole per-node reaction array as its
+        # return value; only the two out arrays are read here.
+        com(results, "GetReactionForcesAndMomentsWithSelections", step,
+            _null_dispatch(), unit_index, selected_objects, selected, each, errors)
+        values = selected.value
+        if values is None or len(values) < 16:
+            return sw._result(
+                False, "The study returned no reaction forces.",
+                SwErrors.swSimulationError,
+                {"code": "RESULTS_NOT_AVAILABLE",
+                 "simulation_error_code": int(errors.value),
+                 "available_steps": available})
+        numbers = [float(value) for value in values[:16]]
+        if not all(math.isfinite(number) for number in numbers):
+            return sw._result(
+                False, "The reaction values are not finite.",
+                SwErrors.swSimulationError,
+                {"code": "RESULTS_NOT_VALID", "reaction": numbers})
+        # The first eight values belong to the selected entities, the last
+        # eight to the entire model.
+        per_face = []
+        whole = numbers[8:16]
+        selection = _reaction_block(numbers[0:8]) if face_indices is not None else None
+        if face_indices is not None:
+            per_object = each.value
+            if per_object is not None and len(per_object) == 8 * len(face_indices):
+                flat = [float(value) for value in per_object]
+                per_face = [
+                    dict(_reaction_block(flat[offset:offset + 8]),
+                         face_index=int(index))
+                    for offset, index in zip(range(0, len(flat), 8), face_indices)]
+        data = {
+            "study": str(com(target, "Name")),
+            "step": step, "unit": unit_key, "unit_index": unit_index,
+            "moment_unit": SW_SIM_REACTION_MOMENT_UNITS.get(unit_index, "unknown"),
+            "available_steps": available,
+            "face_indices": list(face_indices) if face_indices is not None else None,
+            "selection": selection,
+            "per_face": per_face,
+            "entire_model": _reaction_block(whole),
+        }
+        return sw._result(True, "Read the reaction results.", data=data)
+    except Exception as exc:
+        return sw._result(False, f"Reading the reaction results failed: {exc}",
                           SwErrors.swSimulationError, {"code": "SIMULATION_COM_ERROR"})

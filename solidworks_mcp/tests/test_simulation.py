@@ -12,8 +12,8 @@ from solidworks_mcp.core.policy import OperationClass
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools.simulation import (
     apply_fixed_fixture, apply_force_load, apply_pressure_load,
-    create_static_study, get_displacement_results, get_stress_results,
-    run_analysis,
+    create_static_study, get_displacement_results, get_reaction_results,
+    get_stress_results, run_analysis,
 )
 
 FACE_LOOKUP = "solidworks_mcp.tools.simulation._get_planar_face_by_index"
@@ -205,12 +205,30 @@ class FakeResults:
         self.available_steps = 1
         self.values = [7, -1.25, 91, 33.5]
         self.displacement_values = [12, 0.0, 345, 1.842]
+        # Eight values for the selection, then eight for the entire model.
+        self.reaction_values = [0.0] * 8 + [
+            0.0, 2000.0, 0.0, 2000.0, 0.0, 0.0, 0.0, 0.0]
+        self.reaction_each = (None,)
         self.error = 0
         self.calls = []
         self.displacement_calls = []
+        self.reaction_calls = []
 
     def GetMaximumAvailableSteps(self):
         return self.available_steps
+
+    def GetReactionForcesAndMomentsWithSelections(self, step, plane, units,
+                                                  selected, selection, each,
+                                                  errors):
+        self.reaction_calls.append((step, plane, units, selected))
+        errors.value = self.error
+        values = (None if self.reaction_values is None
+                  else type(self.reaction_values)(self.reaction_values))
+        selection.value = values
+        each.value = self.reaction_each
+        # The add-in returns the whole per-node array here; the tool must not
+        # read it, so hand back the same short tuple.
+        return values
 
     def GetMinMaxStress(self, component, element, step, plane, units, errors):
         self.calls.append((component, element, step, plane, units))
@@ -356,12 +374,14 @@ class SimulationRegistrationTests(unittest.TestCase):
         names = {item.name for item in registered_tools()}
         for name in ("create_static_study", "apply_fixed_fixture",
                      "apply_force_load", "apply_pressure_load", "run_analysis",
-                     "get_stress_results", "get_displacement_results"):
+                     "get_stress_results", "get_displacement_results",
+                     "get_reaction_results"):
             self.assertIn(name, names)
         for name in ("create_static_study", "apply_fixed_fixture",
                      "apply_force_load", "apply_pressure_load", "run_analysis"):
             self.assertIs(OperationClass.MUTATE, operation_class_for(name))
-        for name in ("get_stress_results", "get_displacement_results"):
+        for name in ("get_stress_results", "get_displacement_results",
+                     "get_reaction_results"):
             self.assertIs(OperationClass.READ, operation_class_for(name))
 
     def test_force_schema_requires_a_positive_magnitude(self):
@@ -977,6 +997,182 @@ class DisplacementResultTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("SIMULATION_NO_STUDY", result["data"]["code"])
+
+
+class ReactionResultTests(unittest.TestCase):
+    def test_reads_the_entire_model_reaction_in_newtons(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = get_reaction_results(automation)
+
+        self.assertTrue(result["success"], result["message"])
+        data = result["data"]
+        self.assertEqual("N", data["unit"])
+        self.assertEqual(0, data["unit_index"])
+        self.assertEqual("N*m", data["moment_unit"])
+        self.assertEqual(1, data["step"])
+        self.assertIsNone(data["selection"])
+        self.assertIsNone(data["face_indices"])
+        self.assertEqual([], data["per_face"])
+        reaction = data["entire_model"]
+        self.assertEqual(0.0, reaction["force_x"])
+        self.assertEqual(2000.0, reaction["force_y"])
+        self.assertEqual(0.0, reaction["force_z"])
+        self.assertEqual(2000.0, reaction["force_resultant"])
+        self.assertEqual(0.0, reaction["moment_x"])
+        self.assertEqual(0.0, reaction["moment_resultant"])
+        call = automation.model.StudyManager.studies[0].Results.reaction_calls[0]
+        self.assertEqual(1, call[0])       # step
+        self.assertIsNone(call[1].value)   # no displacement plane
+        self.assertEqual(0, call[2])       # newtons
+        self.assertIsNone(call[3].value)   # nothing selected
+
+    def test_force_unit_is_passed_to_the_add_in(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        for unit, expected in (("N", 0), ("lbf", 1), ("kgf", 2)):
+            with self.subTest(unit=unit):
+                result = get_reaction_results(automation, unit=unit)
+
+                self.assertTrue(result["success"], result["message"])
+                self.assertEqual(expected, result["data"]["unit_index"])
+                self.assertEqual(unit, result["data"]["unit"])
+
+    def test_a_torque_reaction_is_read_as_a_moment(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        automation.model.StudyManager.studies[0].Results.reaction_values = (
+            [0.0] * 8 + [2.5, 0.0, 1.0, 2.69, 0.0, 0.0, 500.0, 500.0])
+
+        result = get_reaction_results(automation)
+
+        self.assertTrue(result["success"], result["message"])
+        reaction = result["data"]["entire_model"]
+        self.assertAlmostEqual(2.5, reaction["force_x"], places=6)
+        self.assertAlmostEqual(500.0, reaction["moment_z"], places=6)
+        self.assertAlmostEqual(500.0, reaction["moment_resultant"], places=6)
+
+    def test_unknown_unit_and_step_are_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        self.assertFalse(get_reaction_results(automation, unit="pound")["success"])
+        self.assertFalse(get_reaction_results(automation, unit=7)["success"])
+        self.assertFalse(get_reaction_results(automation, step=0)["success"])
+        self.assertFalse(get_reaction_results(automation, step=True)["success"])
+        self.assertFalse(get_reaction_results(automation, face_indices=[])["success"])
+        self.assertFalse(get_reaction_results(automation, face_indices=["4"])["success"])
+        self.assertFalse(get_reaction_results(automation, face_indices=[True])["success"])
+        self.assertEqual(0, automation.active_doc_calls)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: f"face-{index}")
+    def test_reported_faces_are_resolved_and_read_from_the_selection(self, lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        results = automation.model.StudyManager.studies[0].Results
+        results.reaction_values = [0.0, 1961.33, 0.0, 1961.33, 0.0, 0.0, 0.0, 0.0] + [
+            0.0, 1961.33, 0.0, 1961.33, 0.0, 0.0, 0.0, 0.0]
+        results.reaction_each = (0.0, 1961.33, 0.0, 1961.33,
+                                 0.0, 0.0, 0.0, 0.0)
+
+        result = get_reaction_results(automation, face_indices=[4])
+
+        self.assertTrue(result["success"], result["message"])
+        data = result["data"]
+        self.assertEqual([4], data["face_indices"])
+        self.assertEqual(1961.33, data["selection"]["force_resultant"])
+        self.assertEqual(1961.33, data["entire_model"]["force_resultant"])
+        self.assertEqual(1, len(data["per_face"]))
+        self.assertEqual(4, data["per_face"][0]["face_index"])
+        self.assertEqual(1961.33, data["per_face"][0]["force_resultant"])
+        self.assertEqual([4], [call.args[1] for call in lookup.call_args_list])
+        # A dispatch array of the selected face reaches the add-in.
+        self.assertIsNotNone(results.reaction_calls[0][3].value)
+
+    @patch(FACE_LOOKUP, return_value=None)
+    def test_a_missing_face_is_reported(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = get_reaction_results(automation, face_indices=[9])
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SIMULATION_FACE_NOT_FOUND", result["data"]["code"])
+        self.assertEqual(9, result["data"]["face_index"])
+        self.assertEqual([], automation.model.StudyManager.studies[0]
+                         .Results.reaction_calls)
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_an_unexpected_per_object_count_leaves_per_face_empty(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        results = automation.model.StudyManager.studies[0].Results
+        results.reaction_each = (1.0, 2.0, 3.0)  # not 8 values per face
+
+        result = get_reaction_results(automation, face_indices=[4, 5])
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual([], result["data"]["per_face"])
+        self.assertIsNotNone(result["data"]["selection"])
+
+    def test_unavailable_step_is_reported(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        result = get_reaction_results(automation, step=5)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("RESULTS_STEP_UNAVAILABLE", result["data"]["code"])
+
+    def test_simulation_error_code_is_reported(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        automation.model.StudyManager.studies[0].Results.error = 3
+        automation.model.StudyManager.studies[0].Results.reaction_values = None
+
+        result = get_reaction_results(automation)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("RESULTS_NOT_AVAILABLE", result["data"]["code"])
+        self.assertEqual(3, result["data"]["simulation_error_code"])
+
+    def test_short_or_non_finite_reactions_are_rejected(self):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        results = automation.model.StudyManager.studies[0].Results
+
+        results.reaction_values = [0.0] * 15
+        short = get_reaction_results(automation)
+        self.assertFalse(short["success"])
+        self.assertEqual("RESULTS_NOT_AVAILABLE", short["data"]["code"])
+
+        results.reaction_values = [0.0] * 8 + [
+            0.0, 2000.0, 0.0, 2000.0, 0.0, 0.0, 0.0, float("nan")]
+        non_finite = get_reaction_results(automation)
+        self.assertFalse(non_finite["success"])
+        self.assertEqual("RESULTS_NOT_VALID", non_finite["data"]["code"])
+
+    def test_missing_study_is_reported(self):
+        automation = SimulationAutomation()
+
+        result = get_reaction_results(automation, study="nope")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SIMULATION_NO_STUDY", result["data"]["code"])
+
+    def test_reactions_are_not_taken_from_the_selection_half(self):
+        """A reaction in the selected-entity half must not leak into the total."""
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+        automation.model.StudyManager.studies[0].Results.reaction_values = (
+            [9.0] * 8 + [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+        result = get_reaction_results(automation)
+
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(0.0, result["data"]["entire_model"]["force_resultant"])
+        self.assertEqual(0.0, result["data"]["entire_model"]["moment_resultant"])
 
 
 if __name__ == "__main__":

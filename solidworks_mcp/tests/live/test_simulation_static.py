@@ -23,13 +23,17 @@ from solidworks_mcp.tools.reference_geometry import create_reference_axis
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.simulation import (
     apply_fixed_fixture, apply_force_load, apply_pressure_load,
-    create_static_study, get_displacement_results, get_stress_results,
-    run_analysis)
+    create_static_study, get_displacement_results, get_reaction_results,
+    get_stress_results, run_analysis)
 from solidworks_mcp.tools.weldments import (
     create_structural_member, list_weldment_profiles)
 
 BEAM_LENGTH_MM = 600
 LOAD_NEWTONS = 2000.0
+DEFAULT_PROFILE_NAME = "ipe.sldlfp"
+DEFAULT_PROFILE_FOLDER = "din"
+TUBE_PROFILE_NAME = "square tube.sldlfp"
+TUBE_PROFILE_FOLDER = "iso"
 MATERIAL_DB = (r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\english"
                r"\sldmaterials\solidworks materials.sldmat")
 MATERIAL_NAME = "Plain Carbon Steel"
@@ -76,17 +80,22 @@ class LiveSimulationStaticTests(unittest.TestCase):
             feature = com(feature, "GetNextFeature")
         return name
 
-    def _profile(self):
-        profiles = list_weldment_profiles(self.automation, filter="ipe")
+    def _profile(self, name=DEFAULT_PROFILE_NAME, folder=DEFAULT_PROFILE_FOLDER):
+        """A library profile; the defaults are the DIN IPE most tests use."""
+        stem = name.split(".")[0]
+        profiles = list_weldment_profiles(self.automation, filter=stem)
         self.assertTrue(profiles["success"], profiles["message"])
         items = profiles["data"]["profiles"]
-        self.assertTrue(items, "No IPE weldment profile is installed.")
+        self.assertTrue(items, f"No weldment profile matches {name!r}.")
         chosen = next((item for item in items
-                       if item["folder"].casefold() == "din"
-                       and item["name"].casefold() == "ipe.sldlfp"), None)
-        return chosen or items[0]
+                       if item["folder"].casefold() == folder.casefold()
+                       and item["name"].casefold() == name.casefold()), None)
+        self.assertIsNotNone(
+            chosen, f"Profile {name!r} is not in the {folder!r} folder.")
+        return chosen
 
-    def _beam(self):
+    def _beam(self, profile_name=DEFAULT_PROFILE_NAME,
+              profile_folder=DEFAULT_PROFILE_FOLDER):
         """A 600 mm single-member beam built from a real library profile."""
         self._new_part()
         sketch = self.automation.create_sketch("Front", exact_geometry=True)
@@ -96,7 +105,7 @@ class LiveSimulationStaticTests(unittest.TestCase):
         self.assertTrue(self.automation.exit_sketch()["success"])
 
         document = self._document()
-        profile = self._profile()
+        profile = self._profile(profile_name, profile_folder)
         member = create_structural_member(self.automation,
                                           self._sketch_name(document),
                                           profile["path"])
@@ -422,6 +431,46 @@ class LiveSimulationStaticTests(unittest.TestCase):
             under_pressure["data"]["displacement_max"],
             delta=0.05 * under_force["data"]["displacement_max"])
 
+    def test_pressure_on_a_hollow_section_solves(self):
+        """The same workflow on a second profile family, an ISO square tube."""
+        _document, _feature, profile = self._beam(TUBE_PROFILE_NAME,
+                                                  TUBE_PROFILE_FOLDER)
+        self.assertIn("square tube", str(profile["name"]).casefold())
+        fixed, _loaded = self._end_faces()
+        flange = self._flange_face()
+        listed = list_planar_faces(self.automation)
+        self.assertTrue(listed["success"], listed["message"])
+        area_mm2 = next(item["area_mm2"] for item in listed["data"]["faces"]
+                        if item["index"] == flange)
+        self.assertGreater(area_mm2, 0)
+
+        self.assertTrue(create_static_study(self.automation, "MCP Tlak cev")["success"])
+        fixture = apply_fixed_fixture(self.automation, [fixed], study="MCP Tlak cev")
+        self.assertTrue(fixture["success"], fixture["message"])
+
+        pressure = apply_pressure_load(self.automation, [flange], 0.05, unit="MPa",
+                                       study="MCP Tlak cev")
+
+        self.assertTrue(pressure["success"], pressure["message"])
+        self.assertEqual(0, pressure["data"]["unit_index"])  # the study is SI
+        self.assertAlmostEqual(50000.0, pressure["data"]["read_back_pascal"], places=6)
+        self.assertEqual("square tube.sldlfp", str(profile["name"]))
+
+        analysis = run_analysis(self.automation, study="MCP Tlak cev")
+        if not analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             analysis["data"].get("code"), analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+        self.assertEqual(0, analysis["data"]["run_error"])
+
+        stress = get_stress_results(self.automation, study="MCP Tlak cev")
+        self.assertTrue(stress["success"], stress["message"])
+        self.assertGreater(stress["data"]["stress_max_mpa"], 0)
+
+        displacement = get_displacement_results(self.automation, study="MCP Tlak cev")
+        self.assertTrue(displacement["success"], displacement["message"])
+        self.assertGreater(displacement["data"]["displacement_max"], 0)
+
     # -- displacement results ----------------------------------------------
     def test_displacement_is_reported_in_the_requested_unit(self):
         """The same resultant displacement in mm and in m must differ by 1000."""
@@ -454,6 +503,102 @@ class LiveSimulationStaticTests(unittest.TestCase):
         self.assertGreater(millimetres["data"]["displacement_max"], 0)
         self.assertAlmostEqual(millimetres["data"]["displacement_max"] / 1000.0,
                                metres["data"]["displacement_max"], places=6)
+
+
+    # -- reaction results ---------------------------------------------------
+    def test_reaction_results_oppose_the_applied_load(self):
+        """A solved support must react exactly what was applied.
+
+        The restrained face is passed as a selection, so the reaction is read
+        both for the face and for the whole model.  The add-in's moment half
+        is the sum of nodal moment reactions; a solid mesh has no rotational
+        degree of freedom, so it stays zero and the physical moment reaction
+        lives in the force distribution (checked here as a pure couple).
+        """
+        self._beam()
+
+        # Case 1: a 2000 N axial pull.
+        fixed, loaded = self._end_faces()
+        self.assertTrue(create_static_study(self.automation,
+                                            "MCP Reakcije sila")["success"])
+        self.assertTrue(apply_fixed_fixture(self.automation, [fixed],
+                                           study="MCP Reakcije sila")["success"])
+        force = apply_force_load(self.automation, [loaded], LOAD_NEWTONS,
+                                 study="MCP Reakcije sila")
+        self.assertTrue(force["success"], force["message"])
+
+        analysis = run_analysis(self.automation, study="MCP Reakcije sila")
+        if not analysis["success"]:
+            self.assertEqual("ANALYSIS_AUTHORIZATION_FAILED",
+                             analysis["data"].get("code"), analysis["message"])
+            self.skipTest("Simulation license does not authorize a static solve.")
+        self.assertEqual(0, analysis["data"]["run_error"])
+
+        tensile = get_reaction_results(self.automation, study="MCP Reakcije sila",
+                                       face_indices=[fixed])
+
+        self.assertTrue(tensile["success"], tensile["message"])
+        data = tensile["data"]
+        self.assertEqual("N", data["unit"])
+        self.assertEqual("N*m", data["moment_unit"])
+        self.assertEqual([fixed], data["face_indices"])
+        entire = data["entire_model"]
+        self.assertAlmostEqual(LOAD_NEWTONS, entire["force_resultant"],
+                               delta=LOAD_NEWTONS * 0.01)
+        # Exactly one global component carries the axial reaction.
+        self.assertAlmostEqual(
+            LOAD_NEWTONS,
+            max(abs(entire[key]) for key in ("force_x", "force_y", "force_z")),
+            delta=LOAD_NEWTONS * 0.01)
+        # The restrained face reacts the same load as the whole model.
+        self.assertAlmostEqual(LOAD_NEWTONS, data["selection"]["force_resultant"],
+                               delta=LOAD_NEWTONS * 0.01)
+        self.assertEqual(1, len(data["per_face"]))
+        self.assertEqual(fixed, data["per_face"][0]["face_index"])
+        self.assertAlmostEqual(LOAD_NEWTONS,
+                               data["per_face"][0]["force_resultant"],
+                               delta=LOAD_NEWTONS * 0.01)
+        # A pure axial pull leaves no reaction moment.
+        self.assertLess(abs(entire["moment_resultant"]), 1.0)
+
+        # The same reaction in kgf is the same number of newton times g.
+        in_kgf = get_reaction_results(self.automation, study="MCP Reakcije sila",
+                                      unit="kgf")
+        self.assertTrue(in_kgf["success"], in_kgf["message"])
+        self.assertEqual(2, in_kgf["data"]["unit_index"])
+        self.assertEqual("kgf*cm", in_kgf["data"]["moment_unit"])
+        self.assertAlmostEqual(LOAD_NEWTONS / 9.80665,
+                               in_kgf["data"]["entire_model"]["force_resultant"],
+                               delta=1.0)
+
+        # Case 2: a 500 N*m torque about the beam axis.
+        _faces, axis = self._planar_faces()
+        axis_name = self._reference_axis(axis)
+        self.assertTrue(create_static_study(self.automation,
+                                            "MCP Reakcije moment")["success"])
+        self.assertTrue(apply_fixed_fixture(self.automation, [fixed],
+                                           study="MCP Reakcije moment")["success"])
+        torque = apply_force_load(self.automation, [loaded], 500.0, unit="N*m",
+                                  load_type="torque", reference=axis_name,
+                                  study="MCP Reakcije moment")
+        self.assertTrue(torque["success"], torque["message"])
+
+        turn = run_analysis(self.automation, study="MCP Reakcije moment")
+        self.assertTrue(turn["success"], turn["message"])
+        self.assertEqual(0, turn["data"]["run_error"])
+        # The torque is real: it twists the beam.
+        twist = get_displacement_results(self.automation,
+                                         study="MCP Reakcije moment")
+        self.assertTrue(twist["success"], twist["message"])
+        self.assertGreater(twist["data"]["displacement_max"], 0)
+
+        torsional = get_reaction_results(self.automation,
+                                         study="MCP Reakcije moment")
+
+        self.assertTrue(torsional["success"], torsional["message"])
+        # A pure torque is a couple: the reactions cancel out force-wise.
+        self.assertLess(abs(torsional["data"]["entire_model"]["force_resultant"]),
+                        5.0)
 
 
 if __name__ == "__main__":
