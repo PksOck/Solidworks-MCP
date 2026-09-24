@@ -84,6 +84,258 @@ def _finish_feature(sw, document, feature, success_message, data):
     return sw._result(True, success_message.format(name=feature_name), data=data)
 
 
+def _solid_volume_mm3(document):
+    bodies = com(document, "GetBodies2", 0, True) or []
+    return sum(com(body, "GetMassProperties", 0.0)[3] * 1e9 for body in bodies)
+
+
+@tool(
+    name="rib",
+    description=(
+        "Create a constant-thickness, undrafted rib from a named open sketch "
+        "on an existing solid part. Material extends parallel to the sketch."
+    ),
+    schema={"type": "object", "properties": {
+        "sketch_name": {"type": "string", "minLength": 1},
+        "thickness": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
+        "both_sides": {"type": "boolean", "default": True},
+        "reverse_material": {"type": "boolean", "default": False},
+    }, "required": ["sketch_name", "thickness"]},
+    operation_class=OperationClass.MUTATE,
+)
+def rib(sw, sketch_name: str, thickness: float, unit: str = "mm",
+        both_sides: bool = True, reverse_material: bool = False) -> dict:
+    """InsertRib returns void; prove creation from feature tree and solid volume."""
+    if (not isinstance(sketch_name, str) or not sketch_name.strip()
+            or isinstance(thickness, bool)
+            or not isinstance(thickness, (int, float))
+            or not math.isfinite(thickness) or thickness <= 0
+            or not isinstance(both_sides, bool)
+            or not isinstance(reverse_material, bool)):
+        return sw._result(False, "Invalid rib sketch or thickness.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    try:
+        thickness_m = sw._units.to_meters(thickness, unit)
+    except (KeyError, TypeError, ValueError) as error:
+        return sw._result(False, f"Invalid rib thickness: {error}",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != SW_DOC_PART:
+        return sw._result(False, "A rib requires an active part.", SwErrors.swInvalidFileType)
+    sketch = _find_feature(document, sketch_name)
+    if sketch is None or com(sketch, "GetTypeName2") != "ProfileFeature":
+        return sw._result(False, f"Sketch not found: {sketch_name}",
+                          SwErrors.swSelectionError, {"code": "SKETCH_NOT_FOUND"})
+    volume_before = _solid_volume_mm3(document)
+    if volume_before <= 0:
+        return sw._result(False, "Create a solid body before inserting a rib.",
+                          SwErrors.swFeatureError, {"code": "NO_SOLID_BODY"})
+    before, old_features = _feature_signatures(document)
+    try:
+        com(document, "ClearSelection2", True)
+        if not com(sketch, "Select2", False, 0):
+            return sw._result(False, f"Could not select sketch {sketch_name}.",
+                              SwErrors.swSelectionError)
+        com(com(document, "FeatureManager"), "InsertRib",
+            both_sides, False, thickness_m, 0, reverse_material,
+            False, False, 0.0, False, False)
+        after, new_features = _feature_signatures(document)
+        del old_features, new_features
+        created = [name for name, kind in after if (name, kind) not in before and kind == "Rib"]
+        if not created:
+            return sw._result(False, "SolidWorks did not create a rib; check the open "
+                              "sketch and material direction.", SwErrors.swFeatureError,
+                              {"code": "FEATURE_CREATE_FAILED"})
+        feature = _find_feature(document, created[-1])
+        if com(feature, "GetErrorCode"):
+            return _finish_feature(sw, document, feature, "", {})
+        volume_after = _solid_volume_mm3(document)
+        if volume_after <= volume_before + 1e-6:
+            cleanup_error = _remove_broken_feature(sw, document, feature)
+            return sw._result(False, "Rib did not add solid volume.",
+                              SwErrors.swFeatureError,
+                              {"code": "NO_ADDED_VOLUME", "removed": cleanup_error is None})
+        return sw._result(True, f"Created rib {created[-1]}.", data={
+            "feature_name": created[-1], "sketch_name": sketch_name,
+            "thickness": thickness, "unit": unit,
+            "volume_before_mm3": volume_before, "volume_after_mm3": volume_after,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Rib creation failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="dome",
+    description="Raise a dome from a planar face of the active solid part.",
+    schema={"type": "object", "properties": {
+        "face_index": {"type": "integer", "minimum": 0},
+        "height": {"type": "number", "exclusiveMinimum": 0},
+        "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"], "default": "mm"},
+        "elliptical": {"type": "boolean", "default": False},
+    }, "required": ["face_index", "height"]},
+    operation_class=OperationClass.MUTATE,
+)
+def dome(sw, face_index: int, height: float, unit: str = "mm",
+         elliptical: bool = False) -> dict:
+    """Select one outward planar face with mark 1 and validate created geometry."""
+    if (isinstance(face_index, bool) or not isinstance(face_index, int)
+            or face_index < 0 or isinstance(height, bool)
+            or not isinstance(height, (int, float)) or not math.isfinite(height)
+            or height <= 0 or not isinstance(elliptical, bool)):
+        return sw._result(False, "Invalid dome face index or height.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    try:
+        height_m = sw._units.to_meters(height, unit)
+    except (KeyError, TypeError, ValueError) as error:
+        return sw._result(False, f"Invalid dome height: {error}",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != SW_DOC_PART:
+        return sw._result(False, "A dome requires an active part.", SwErrors.swInvalidFileType)
+    face = _get_planar_face_by_index(document, face_index)
+    if face is None:
+        return sw._result(False, f"Planar face {face_index} not found; re-run "
+                          "list_planar_faces.", SwErrors.swSelectionError,
+                          {"code": "FACE_NOT_FOUND"})
+    volume_before = _solid_volume_mm3(document)
+    before, old_features = _feature_signatures(document)
+    try:
+        com(document, "ClearSelection2", True)
+        if not _select_with_mark(document, face, False, 1):
+            return sw._result(False, "Could not select face for dome.",
+                              SwErrors.swSelectionError)
+        # IModelDoc2.InsertDome is void: verify the new feature and the body.
+        com(document, "InsertDome", height_m, False, elliptical)
+        after, new_features = _feature_signatures(document)
+        del old_features, new_features
+        created = [name for name, kind in after if (name, kind) not in before and kind == "Dome"]
+        if not created:
+            return sw._result(False, "SolidWorks did not create a dome.",
+                              SwErrors.swFeatureError, {"code": "FEATURE_CREATE_FAILED"})
+        feature = _find_feature(document, created[-1])
+        if com(feature, "GetErrorCode"):
+            return _finish_feature(sw, document, feature, "", {})
+        volume_after = _solid_volume_mm3(document)
+        if volume_after <= volume_before + 1e-6:
+            cleanup_error = _remove_broken_feature(sw, document, feature)
+            return sw._result(False, "Dome did not add solid volume.",
+                              SwErrors.swFeatureError,
+                              {"code": "NO_ADDED_VOLUME", "removed": cleanup_error is None})
+        return sw._result(True, f"Created dome {created[-1]}.", data={
+            "feature_name": created[-1], "height": height, "unit": unit,
+            "volume_before_mm3": volume_before, "volume_after_mm3": volume_after,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Dome creation failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
+@tool(
+    name="hole_wizard",
+    description=("Create a straight ANSI metric drill-size Hole Wizard hole at a "
+                 "point (model coordinates) on a planar face of the active part. "
+                 "Use list_planar_faces for the current face index and point; "
+                 "catalog_size defaults to the ANSI Metric one-decimal drill size."),
+    schema={"type": "object", "properties": {
+        "face_index": {"type": "integer", "minimum": 0},
+        "point_mm": {"type": "array", "items": {"type": "number"},
+                     "minItems": 3, "maxItems": 3},
+        "diameter_mm": {"type": "number", "exclusiveMinimum": 0},
+        "depth_mm": {"type": "number", "exclusiveMinimum": 0},
+        "catalog_size": {"type": "string", "minLength": 1,
+                         "description": "Exact ANSI metric Drill sizes SIZE from Toolbox (e.g. Ø6.0)."},
+    }, "required": ["face_index", "point_mm", "diameter_mm", "depth_mm"]},
+    operation_class=OperationClass.MUTATE,
+)
+def hole_wizard(sw, face_index: int, point_mm, diameter_mm: float,
+                depth_mm: float, catalog_size: str = None) -> dict:
+    """Blind straight drill hole, using the SW2025 HoleWizard5 COM signature."""
+    def positive(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value > 0)
+
+    if (not isinstance(face_index, int) or isinstance(face_index, bool)
+            or face_index < 0 or not isinstance(point_mm, (list, tuple))
+            or len(point_mm) != 3 or any(not isinstance(v, (int, float))
+                                          or isinstance(v, bool) or not math.isfinite(v)
+                                          for v in point_mm)
+            or not positive(diameter_mm) or not positive(depth_mm)
+            or (catalog_size is not None and
+                (not isinstance(catalog_size, str) or not catalog_size.strip()))):
+        return sw._result(False, "Invalid hole face, point, diameter or depth.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    if catalog_size is None:
+        if abs(diameter_mm * 10 - round(diameter_mm * 10)) > 1e-8:
+            return sw._result(False, "Supply the exact Toolbox catalog_size for "
+                              "diameters with more than one decimal place.",
+                              SwErrors.swInvalidInput, {"code": "CATALOG_SIZE_REQUIRED"})
+        catalog_size = f"Ø{diameter_mm:.1f}"
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != SW_DOC_PART:
+        return sw._result(False, "Hole Wizard requires a part.", SwErrors.swInvalidFileType)
+    face = _get_planar_face_by_index(document, face_index)
+    if face is None:
+        return sw._result(False, "Planar face not found; re-run list_planar_faces.",
+                          SwErrors.swSelectionError, {"code": "FACE_NOT_FOUND"})
+    try:
+        plane = com(com(face, "GetSurface"), "PlaneParams")
+        nx, ny, nz = (float(v) for v in plane[3:6])
+        norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if norm < 1e-12:
+            return sw._result(False, "Invalid face normal.", SwErrors.swSelectionError)
+        nx, ny, nz = nx / norm, ny / norm, nz / norm
+        x, y, z = (value / 1000 for value in point_mm)
+        diameter, depth = diameter_mm / 1000, depth_mm / 1000
+        before = _solid_volume_mm3(document)
+        com(document, "ClearSelection2", True)
+        selected = com(com(document, "Extension"), "SelectByRay",
+                       x + nx * 0.001, y + ny * 0.001, z + nz * 0.001,
+                       -nx, -ny, -nz, 0.0001, 2, False, 0, 0)
+        if not selected:
+            return sw._result(False, "Could not select hole location on face.",
+                              SwErrors.swSelectionError)
+        # swWzdHole=2, swStandardAnsiMetric=1, swStandardAnsiMetricDrillSizes=39,
+        # swEndCondBlind=0; unused Value1..12 are -1 (HoleWizard5 help).
+        feature = com(com(document, "FeatureManager"), "HoleWizard5",
+                      2, 1, 39, catalog_size, 0, diameter, depth, 0.0,
+                      *([-1.0] * 12), "", False, False, True, False, True, False)
+        if feature is None:
+            return sw._result(False, "SolidWorks did not create a Hole Wizard feature.",
+                              SwErrors.swFeatureError)
+        result = _finish_feature(sw, document, feature, "Created hole {name}.",
+                                 {"face_index": face_index, "point_mm": list(point_mm),
+                                  "diameter_mm": diameter_mm, "depth_mm": depth_mm,
+                                  "catalog_size": catalog_size})
+        if not result["success"]:
+            return result
+        after = _solid_volume_mm3(document)
+        if after >= before - 1e-6:
+            removed = _remove_broken_feature(sw, document, feature)
+            return sw._result(False, "Hole did not remove solid volume.",
+                              SwErrors.swFeatureError,
+                              {"code": "NO_REMOVED_VOLUME", "removed": removed is None})
+        result["data"].update(volume_before_mm3=before, volume_after_mm3=after)
+        return result
+    except Exception as create_error:
+        return sw._result(False, f"Hole Wizard failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
 @tool(
     name="shell_feature",
     description=(

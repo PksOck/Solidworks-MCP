@@ -109,6 +109,44 @@ class ServerSessionGuardTests(unittest.TestCase):
         self.assertIn('"revision_token": "mcp:0"', response[0].text)
         self.assertIn('"revision_token": "mcp:1"', response[0].text)
 
+    def test_save_as_rebinds_document_when_unsaved_identity_becomes_path(self):
+        from solidworks_mcp.registry import _load
+
+        _load()
+        original = _TOOLS["save_document"]
+
+        class SavedAutomation(FakeAutomation):
+            def __init__(self):
+                super().__init__()
+                self.saved = False
+
+            def bind_active_document(self):
+                if self.saved:
+                    return DocumentRef("doc-saved", "C:\\scratch\\part.SLDPRT", "part", "Default", "mcp:0")
+                return super().bind_active_document()
+
+            def capture_active_document_ref(self):
+                return self.bind_active_document(), None
+
+        @tool(
+            name="_test_save_as_rebind",
+            description="test",
+            schema={"type": "object", "properties": {}, "required": []},
+            operation_class=OperationClass.MUTATE,
+        )
+        def save(sw):
+            sw.saved = True
+            return sw._result(True, "saved")
+
+        _TOOLS["save_document"] = _TOOLS.pop("_test_save_as_rebind")
+        try:
+            automation = SavedAutomation()
+            server.sw_automation = automation
+            result = asyncio.run(server.call_tool("save_document", {"operation_id": "save-as-rebind-test"}))
+            self.assertIn('"document_id": "doc-saved"', result[0].text)
+        finally:
+            _TOOLS["save_document"] = original
+
 
 if __name__ == "__main__":
     unittest.main()

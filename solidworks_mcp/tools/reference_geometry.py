@@ -16,6 +16,60 @@ SW_REF_PLANE_DISTANCE_REVERSED = 264
 
 
 @tool(
+    name="create_reference_axis",
+    description="Create an axis along the intersection of two distinct, exactly named planes.",
+    schema={"type": "object", "properties": {
+        "first_plane": {"type": "string", "minLength": 1},
+        "second_plane": {"type": "string", "minLength": 1},
+    }, "required": ["first_plane", "second_plane"]},
+    operation_class=OperationClass.MUTATE,
+)
+def create_reference_axis(sw, first_plane: str, second_plane: str) -> dict:
+    if (not isinstance(first_plane, str) or not first_plane.strip()
+            or not isinstance(second_plane, str) or not second_plane.strip()
+            or first_plane.strip() == second_plane.strip()):
+        return sw._result(False, "Select two distinct named planes.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    if com(document, "GetType") != 1:
+        return sw._result(False, "An axis requires a part.", SwErrors.swInvalidFileType)
+    def axes():
+        found = []
+        feature = com(document, "FirstFeature")
+        while feature is not None:
+            if com(feature, "GetTypeName2") == "RefAxis":
+                found.append(str(com(feature, "Name")))
+            feature = com(feature, "GetNextFeature")
+        return found
+    try:
+        before = axes()
+        com(document, "ClearSelection2", True)
+        empty = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        extension = com(document, "Extension")
+        for index, name in enumerate((first_plane, second_plane)):
+            if not com(extension, "SelectByID2", name, "PLANE", 0.0, 0.0, 0.0,
+                       index > 0, 0, empty, 0):
+                return sw._result(False, f"Plane not found: {name}",
+                                  SwErrors.swSelectionError)
+        inserted = com(document, "InsertAxis2", True)
+        created = [name for name in axes() if name not in before]
+        if not inserted or not created:
+            return sw._result(False, "SolidWorks did not create a reference axis.",
+                              SwErrors.swFeatureError)
+        return sw._result(True, f"Created reference axis {created[-1]}.", data={
+            "feature_name": created[-1], "first_plane": first_plane,
+            "second_plane": second_plane,
+        })
+    except Exception as create_error:
+        return sw._result(False, f"Reference axis failed: {create_error}",
+                          SwErrors.swFeatureError)
+    finally:
+        com(document, "ClearSelection2", True)
+
+
+@tool(
     name="create_reference_plane",
     description="Create an offset reference plane from one exactly named existing plane.",
     schema={"type": "object", "properties": {

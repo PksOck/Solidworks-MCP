@@ -801,6 +801,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 target_after = sw_automation.bind_active_document()
             elif name == "bind_active_document":
                 target_after = document
+            elif name == "save_document" and target_before is not None:
+                saved_ref, error = sw_automation.capture_active_document_ref()
+                if error:
+                    raise RuntimeError(error["message"])
+                if saved_ref.document_id != target_before.document_id or saved_ref.path != target_before.path:
+                    target_after = sw_automation.bind_active_document()
+                else:
+                    target_after = sw_automation.mark_active_document_mutated(target_before)
             elif (
                 target_before is not None
                 and operation_class is OperationClass.MUTATE

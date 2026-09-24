@@ -1,5 +1,6 @@
 import math
 import os
+import shutil
 import unittest
 from pathlib import Path
 from uuid import uuid4
@@ -17,9 +18,10 @@ from solidworks_mcp.tools.assembly import (
 )
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import (
-    boundary_boss, boundary_cut, draft_faces, loft_cut, loft_sketches, revolve_cut, shell_feature, sweep_cut, sweep_sketch,
+    boundary_boss, boundary_cut, dome, draft_faces, hole_wizard, loft_cut, loft_sketches, revolve_cut, rib, shell_feature, sweep_cut, sweep_sketch,
 )
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
+from solidworks_mcp.tools.drawings import add_standard_3_view, insert_cut_list_table, list_drawing_views
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.sheetmetal import (
     create_sheet_metal_base_flange, export_flat_pattern,
@@ -32,7 +34,11 @@ from solidworks_mcp.tools.export import (
 from solidworks_mcp.tools.history import redo, undo
 from solidworks_mcp.tools.inspection import list_planes
 from solidworks_mcp.tools.patterns import mirror_feature
-from solidworks_mcp.tools.reference_geometry import create_reference_plane
+from solidworks_mcp.tools.reference_geometry import create_reference_axis, create_reference_plane
+from solidworks_mcp.tools.properties import set_custom_property
+from solidworks_mcp.tools.configurations import create_configuration
+from solidworks_mcp.tools.body_features import scale_body
+from solidworks_mcp.tools.surface_features import extrude_surface, knit_surface, offset_surface, planar_surface, revolve_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
 from solidworks_mcp.tools.views import capture_view
 
@@ -618,6 +624,463 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertGreater(drawing_path.stat().st_size, 0)
         self.assertEqual("drawing", saved_drawing["data"]["document_type"])
         self.created_titles.append(str(com(drawing, "GetTitle")))
+
+    def test_standard_views_and_cut_list_table_on_scratch_weldment(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_cutlist_{uuid4().hex}.SLDPRT"
+        drawing_path = part_path.with_suffix(".SLDDRW")
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_line(0, 0, 100, 0, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        profiles = list_weldment_profiles(self.automation, filter="square tube")
+        self.assertTrue(profiles["success"], profiles["message"])
+        self.assertTrue(profiles["data"]["profiles"])
+        profile = profiles["data"]["profiles"][0]
+        member = create_structural_member(
+            self.automation, self._last_sketch_name(part), profile["path"]
+        )
+        self.assertTrue(member["success"], member["message"])
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.created_titles.append(str(com(part, "GetTitle")))
+
+        self._new_drawing("A4")
+        views = add_standard_3_view(self.automation, str(com(part, "GetTitle")))
+        self.assertTrue(views["success"], views["message"])
+        drawing, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        model_views = list_drawing_views(self.automation)
+        self.assertTrue(model_views["success"], model_views["message"])
+        self.assertGreaterEqual(len(model_views["data"]["views"]), 4)
+        view_name = self._model_view_name()
+        self.assertIsNotNone(view_name)
+        result = insert_cut_list_table(self.automation, view_name)
+        self.assertTrue(result["success"], result["message"])
+        self.assertGreater(result["data"]["rows"], 1)
+        self.assertGreater(result["data"]["columns"], 0)
+        saved_drawing = save_document(self.automation, path=str(drawing_path))
+        self.assertTrue(saved_drawing["success"], saved_drawing["message"])
+        self.assertGreater(drawing_path.stat().st_size, 0)
+        drawing_title = str(com(drawing, "GetTitle"))
+        part_title = str(com(part, "GetTitle"))
+        self.created_titles.append(drawing_title)
+        self.automation.app.CloseDoc(drawing_title)
+        self.automation.app.CloseDoc(part_title)
+        open_documents = self.automation.list_open_documents()
+        self.assertTrue(open_documents["success"])
+        self.assertFalse({drawing_title, part_title} & {
+            item["title"] for item in open_documents["data"]["documents"]
+        })
+
+    def test_rib_adds_solid_volume_and_saved_part_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_rib_{uuid4().hex}.SLDPRT"
+        sample = Path(r"C:\Users\Public\Documents\SOLIDWORKS\SOLIDWORKS 2025"
+                      r"\samples\tutorial\api\block20.sldprt")
+        if not sample.is_file():
+            self.skipTest("SOLIDWORKS 2025 block20 sample not installed")
+        root.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(sample, part_path)
+        opened = self.automation.open_document(str(part_path))
+        self.assertTrue(opened["success"], opened["message"])
+        self.created_titles.append(opened["data"]["name"])
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        extension = com(part, "Extension")
+        selection_data = win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
+        self.assertTrue(com(extension, "SelectByID2", "", "FACE",
+                            -0.00878816842651986, 0.0396239999998897,
+                            -0.0292468281514857, False, 1, selection_data, 0))
+        com(part, "InsertFeatureShell", 0.00254, False)
+        self.assertTrue(com(extension, "SelectByID2", "", "FACE",
+                            0.00264031138414111, 0.028407059059532,
+                            -0.0613970439424634, True, 0, selection_data, 0))
+        self.assertTrue(com(extension, "SelectByID2", "", "FACE",
+                            -0.059937899786064, 0.0277866864457792,
+                            -0.00877977980189826, True, 1, selection_data, 0))
+        plane = com(com(part, "FeatureManager"), "InsertRefPlane", 128, 0, 128, 0, 0, 0)
+        self.assertIsNotNone(plane)
+        com(part, "ClearSelection2", True)
+        self.assertTrue(com(extension, "SelectByID2", "Plane1", "PLANE", 0, 0, 0,
+                            False, 0, selection_data, 0))
+        sketch_manager = com(part, "SketchManager")
+        com(sketch_manager, "InsertSketch", True)
+        for start, end in (
+            ((-0.085797, 0.021082), (-0.03423, 0.035134)),
+            ((-0.03423, 0.035134), (0.007726, 0.025357)),
+            ((0.007726, 0.025357), (0.111514, 0.039624)),
+        ):
+            self.assertIsNotNone(com(sketch_manager, "CreateLine", *start, 0.0, *end, 0.0))
+        com(part, "ClearSelection2", True)
+        com(sketch_manager, "InsertSketch", True)
+        com(part, "ClearSelection2", True)
+        before = self._total_volume_mm3()
+        sketch_name = self._last_sketch_name(part)
+        result = rib(self.automation, sketch_name, thickness=2.54, unit="mm")
+        self.assertTrue(result["success"], f'{result["message"]}; data={result.get("data")}; features={self._top_level_feature_types()}')
+        self.assertGreater(self._total_volume_mm3(), before + 1)
+        self.assertIn("Rib", self._top_level_feature_types())
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        self.automation.app.CloseDoc(opened["data"]["name"])
+        open_documents = self.automation.list_open_documents()
+        self.assertTrue(open_documents["success"])
+        self.assertNotIn(
+            opened["data"]["name"],
+            [item["title"] for item in open_documents["data"]["documents"]],
+        )
+
+    def test_dome_on_block_adds_volume_then_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_dome_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        self._close_sketch()
+        self.assertTrue(self.automation.extrude_sketch(10, False, "mm")["success"])
+        before = self._total_volume_mm3()
+        self.assertAlmostEqual(before, 16000, delta=0.1)
+        faces = list_planar_faces(self.automation)
+        self.assertTrue(faces["success"], faces["message"])
+        cap = next((f for f in faces["data"]["faces"]
+                    if abs(f["area_mm2"] - 1600) < 0.1 and f["normal"][0] > 0.9), None)
+        self.assertIsNotNone(cap)
+        result = dome(self.automation, cap["index"], height=5, unit="mm")
+        self.assertTrue(result["success"], result["message"])
+        self.assertIn("Dome", self._top_level_feature_types())
+        self.assertGreater(self._total_volume_mm3(), before + 1)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_hole_wizard_removes_volume_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_hole_wizard_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        self._close_sketch()
+        self.assertTrue(self.automation.extrude_sketch(15, False, "mm")["success"])
+        before = self._total_volume_mm3()
+        faces = list_planar_faces(self.automation)
+        self.assertTrue(faces["success"], faces["message"])
+        cap = next((f for f in faces["data"]["faces"]
+                    if abs(f["area_mm2"] - 1600) < 0.1 and f["normal"][0] > 0.9), None)
+        self.assertIsNotNone(cap)
+        result = hole_wizard(self.automation, cap["index"],
+                             [cap["point_mm"][0], 0, 0], 6, 8)
+        self.assertTrue(result["success"], result["message"])
+        self.assertLess(self._total_volume_mm3(), before - 10)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_reference_axis_intersects_planes_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_reference_axis_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-15, -15, 15, 15, "mm")["success"])
+        self._close_sketch()
+        self.assertTrue(self.automation.extrude_sketch(10, False, "mm")["success"])
+        result = create_reference_axis(self.automation, "Front Plane", "Top Plane")
+        self.assertTrue(result["success"], result["message"])
+        self.assertIn("RefAxis", self._top_level_feature_types())
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_planar_surface_from_closed_sketch_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_planar_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        sketch_name = self._last_sketch_name(part)
+        result = planar_surface(self.automation, sketch_name)
+        self.assertTrue(result["success"], f'{result["message"]}; features={self._top_level_feature_types()}')
+        sheet_bodies = com(part, "GetBodies2", 1, True) or []
+        self.assertGreaterEqual(len(sheet_bodies), 1)
+        area_mm2 = sum(com(face, "GetArea") * 1e6 for body in sheet_bodies
+                       for face in (com(body, "GetFaces") or []))
+        self.assertAlmostEqual(1600, area_mm2, delta=0.2)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_thicken_surface_creates_solid_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_thicken_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        planar = planar_surface(self.automation, self._last_sketch_name(part))
+        self.assertTrue(planar["success"], planar["message"])
+        result = thicken_surface(self.automation, planar["data"]["feature_name"],
+                                 2, side="both")
+        self.assertTrue(result["success"], result["message"])
+        # Both sides apply 2 mm on each side of the surface (4 mm total).
+        self.assertAlmostEqual(6400, self._total_volume_mm3(), delta=0.5)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_extrude_surface_from_line_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_extrude_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_line(-20, 0, 20, 0, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        result = extrude_surface(self.automation, self._last_sketch_name(part), 10)
+        self.assertTrue(result["success"], f'{result["message"]}; features={self._top_level_feature_types()}')
+        sheet_bodies = com(part, "GetBodies2", 1, True) or []
+        self.assertGreaterEqual(len(sheet_bodies), 1)
+        area_mm2 = sum(com(face, "GetArea") * 1e6 for body in sheet_bodies
+                       for face in (com(body, "GetFaces") or []))
+        self.assertAlmostEqual(400, area_mm2, delta=0.2)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_custom_property_scopes_save_and_close(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_properties_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        config_name = str(com(com(part, "ConfigurationManager"), "ActiveConfiguration").Name)
+        first = set_custom_property(self.automation, "MCP_Document", "DOCUMENT_42")
+        self.assertTrue(first["success"], first["message"])
+        second = set_custom_property(self.automation, "MCP_Config", "CONFIG_19",
+                                     configuration=config_name)
+        self.assertTrue(second["success"], second["message"])
+        self.assertEqual("DOCUMENT_42", first["data"]["read_back"])
+        self.assertEqual("CONFIG_19", second["data"]["read_back"])
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_revolve_surface_sheet_area_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_revolve_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_line(10, -10, 10, 10, "mm")["success"])
+        self.assertTrue(draw_centerline(self.automation, 0, -15, 0, 15)["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        result = revolve_surface(self.automation, self._last_sketch_name(part))
+        self.assertTrue(result["success"], f'{result["message"]}; features={self._top_level_feature_types()}')
+        sheets = com(part, "GetBodies2", 1, True) or []
+        self.assertGreaterEqual(len(sheets), 1)
+        area_mm2 = sum(com(face, "GetArea") * 1e6 for body in sheets
+                       for face in (com(body, "GetFaces") or []))
+        self.assertAlmostEqual(400 * math.pi, area_mm2, delta=0.5)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_offset_planar_surface_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_offset_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        self._close_sketch()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        planar = planar_surface(self.automation, self._last_sketch_name(part))
+        self.assertTrue(planar["success"], planar["message"])
+        sheets_before = com(part, "GetBodies2", 1, True) or []
+        self.assertEqual(1, len(sheets_before))
+        result = offset_surface(self.automation, planar["data"]["feature_name"], 5)
+        self.assertTrue(result["success"], f'{result["message"]}; features={self._top_level_feature_types()}')
+        sheets_after = com(part, "GetBodies2", 1, True) or []
+        self.assertEqual(2, len(sheets_after))
+        area_mm2 = sum(com(face, "GetArea") * 1e6 for body in sheets_after
+                       for face in (com(body, "GetFaces") or []))
+        self.assertAlmostEqual(3200, area_mm2, delta=0.5)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_configuration_added_on_solid_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_configuration_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
+        extruded = self.automation.extrude_sketch(10, False, "mm")
+        self.assertTrue(extruded["success"], extruded["message"])
+        before_volume = self._total_volume_mm3()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        first_config = str(com(com(part, "ConfigurationManager"), "ActiveConfiguration").Name)
+        result = create_configuration(self.automation, "MCP_TEST_VARIANT",
+                                      comment="MCP live", description="test configuration",
+                                      activate=True)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("MCP_TEST_VARIANT", result["data"]["read_back"]["name"])
+        self.assertTrue(result["data"]["active"])
+        self.assertAlmostEqual(before_volume, self._total_volume_mm3(), delta=0.01)
+        duplicate = create_configuration(self.automation, "MCP_TEST_VARIANT")
+        self.assertFalse(duplicate["success"])
+        self.assertEqual("CONFIGURATION_EXISTS", duplicate["data"]["code"])
+        self.assertIsNotNone(com(part, "GetConfigurationByName", first_config))
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_knit_adjacent_planar_surfaces_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_knit_surface_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        names = []
+        for left, right in ((-20, 0), (0, 20)):
+            self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+            self.assertTrue(self.automation.draw_rectangle(left, -20, right, 20, "mm")["success"])
+            self._close_sketch()
+            part, error = self.automation.get_active_doc()
+            self.assertIsNone(error)
+            result = planar_surface(self.automation, self._last_sketch_name(part))
+            self.assertTrue(result["success"], result["message"])
+            names.append(result["data"]["feature_name"])
+        sheets_before = com(part, "GetBodies2", 1, True) or []
+        self.assertEqual(2, len(sheets_before))
+        result = knit_surface(self.automation, names)
+        self.assertTrue(result["success"], f'{result["message"]}; features={self._top_level_feature_types()}')
+        sheets_after = com(part, "GetBodies2", 1, True) or []
+        self.assertEqual(1, len(sheets_after))
+        area_mm2 = sum(com(face, "GetArea") * 1e6 for body in sheets_after
+                       for face in (com(body, "GetFaces") or []))
+        self.assertAlmostEqual(1600, area_mm2, delta=0.5)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_scale_body_doubles_dimensions_and_octuples_volume_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_scale_body_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(0, 0, 10, 20, "mm")["success"])
+        self._close_sketch()
+        extruded = self.automation.extrude_sketch(30, False, "mm")
+        self.assertTrue(extruded["success"], extruded["message"])
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        original_body = (com(part, "GetBodies2", 0, True) or [])[0]
+        before_box = com(original_body, "GetBodyBox")
+        before_volume = self._total_volume_mm3()
+        self.assertAlmostEqual(6000, before_volume, delta=0.2)
+        result = scale_body(self.automation, 0, 2, origin="origin")
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(before_volume * 8, self._total_volume_mm3(), delta=1)
+        after_body = (com(part, "GetBodies2", 0, True) or [])[0]
+        after_box = com(after_body, "GetBodyBox")
+        for axis in range(3):
+            self.assertAlmostEqual(
+                2 * (before_box[axis + 3] - before_box[axis]),
+                after_box[axis + 3] - after_box[axis], delta=0.0001)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
 
     def test_auto_balloon_scratch_drawing_view_without_saving(self):
         part_title = self._new_part_with_extrusion()
