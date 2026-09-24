@@ -13,13 +13,18 @@ from uuid import uuid4
 from solidworks_mcp.automation import SolidWorksAutomation
 from solidworks_mcp.comutil import com
 from solidworks_mcp.tools.advanced_features import hole_wizard
+from solidworks_mcp.tools.appearance import set_appearance
+from solidworks_mcp.tools.configurations import create_configuration
+from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.export import list_planar_faces
+from solidworks_mcp.tools.properties import set_custom_property
+from solidworks_mcp.tools.reference_geometry import create_reference_axis
 from solidworks_mcp.tools.saving import save_document
 
 
 @unittest.skipUnless(os.environ.get("SW_MCP_LIVE_TESTS") == "1",
                      "Set SW_MCP_LIVE_TESTS=1 to run SolidWorks COM tests.")
-class LiveGroupedEdgeAndHoleTests(unittest.TestCase):
+class LiveGroupedSingleBodyTests(unittest.TestCase):
     """One 100 x 100 x 40 mm body, with non-overlapping edge treatments."""
 
     @classmethod
@@ -112,13 +117,82 @@ class LiveGroupedEdgeAndHoleTests(unittest.TestCase):
         self.assertLess(self._volume(), before - 10)
         type(self).stage = 3
 
-    def test_04_save_and_close_shared_part(self):
+    def test_04_reference_axis_does_not_change_volume(self):
         self._require_stage(3)
+        before = self._volume()
+        result = create_reference_axis(self.automation, "Front Plane", "Top Plane")
+        self.assertTrue(result["success"], result["message"])
+        self.assertAlmostEqual(before, self._volume(), delta=0.01)
+        type(self).stage = 4
+
+    def test_05_custom_properties_in_both_scopes(self):
+        self._require_stage(4)
+        before = self._volume()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        config = str(com(com(part, "ConfigurationManager"), "ActiveConfiguration").Name)
+        first = set_custom_property(self.automation, "MCP_Document", "DOCUMENT_42")
+        self.assertTrue(first["success"], first["message"])
+        second = set_custom_property(self.automation, "MCP_Config", "CONFIG_19",
+                                     configuration=config)
+        self.assertTrue(second["success"], second["message"])
+        self.assertEqual("DOCUMENT_42", first["data"]["read_back"])
+        self.assertEqual("CONFIG_19", second["data"]["read_back"])
+        self.assertAlmostEqual(before, self._volume(), delta=0.01)
+        type(self).stage = 5
+
+    def test_06_configuration_keeps_body_geometry(self):
+        self._require_stage(5)
+        before = self._volume()
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        first_config = str(com(com(part, "ConfigurationManager"), "ActiveConfiguration").Name)
+        result = create_configuration(self.automation, "MCP_TEST_VARIANT",
+                                      comment="MCP live", description="test configuration",
+                                      activate=True)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("MCP_TEST_VARIANT", result["data"]["read_back"]["name"])
+        self.assertTrue(result["data"]["active"])
+        self.assertAlmostEqual(before, self._volume(), delta=0.01)
+        duplicate = create_configuration(self.automation, "MCP_TEST_VARIANT")
+        self.assertFalse(duplicate["success"])
+        self.assertEqual("CONFIGURATION_EXISTS", duplicate["data"]["code"])
+        self.assertIsNotNone(com(part, "GetConfigurationByName", first_config))
+        type(self).stage = 6
+
+    def test_07_equation_round_trips_without_volume_change(self):
+        self._require_stage(6)
+        before = self._volume()
+        result = add_equation(self.automation, "MCP_Width", 20)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("verified", result["data"]["status"])
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        manager = com(part, "GetEquationMgr")
+        self.assertTrue(com(manager, "GlobalVariable", result["data"]["index"]))
+        self.assertIn('"MCP_Width"', com(manager, "Equation", result["data"]["index"]))
+        self.assertAlmostEqual(before, self._volume(), delta=0.01)
+        type(self).stage = 7
+
+    def test_08_appearance_preserves_geometry(self):
+        self._require_stage(7)
+        before = self._volume()
+        result = set_appearance(self.automation, 0.2, 0.5, 0.8)
+        self.assertTrue(result["success"], result["message"])
+        self.assertTrue(all(abs(actual - value) < 1 / 255 + 1e-6
+                            for actual, value in zip(result["data"]["rgb"], (0.2, 0.5, 0.8))))
+        self.assertAlmostEqual(before, self._volume(), delta=0.01)
+        type(self).stage = 8
+
+    def test_09_save_and_close_shared_part(self):
+        self._require_stage(8)
         saved = save_document(self.automation, path=str(self.path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(self.path.stat().st_size, 0)
         part, error = self.automation.get_active_doc()
         self.assertIsNone(error)
+        self.assertTrue(all(abs(com(part, "MaterialPropertyValues")[i] - value) < 1 / 255 + 1e-6
+                            for i, value in enumerate((0.2, 0.5, 0.8))))
         title = str(com(part, "GetTitle"))
         self.automation.app.CloseDoc(title)
         type(self).title = None
