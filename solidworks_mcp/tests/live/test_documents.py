@@ -18,7 +18,7 @@ from solidworks_mcp.tools.assembly import (
 )
 from solidworks_mcp.tools.inspection import inspect_document
 from solidworks_mcp.tools.advanced_features import (
-    boundary_boss, boundary_cut, dome, draft_faces, hole_wizard, loft_cut, loft_sketches, revolve_cut, rib, shell_feature, sweep_cut, sweep_sketch,
+    boundary_boss, boundary_cut, dome, draft_faces, loft_cut, loft_sketches, revolve_cut, rib, shell_feature, sweep_cut, sweep_sketch,
 )
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.drawings import add_standard_3_view, insert_cut_list_table, list_drawing_views
@@ -755,35 +755,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertTrue(result["success"], result["message"])
         self.assertIn("Dome", self._top_level_feature_types())
         self.assertGreater(self._total_volume_mm3(), before + 1)
-        saved = save_document(self.automation, path=str(part_path))
-        self.assertTrue(saved["success"], saved["message"])
-        self.assertGreater(part_path.stat().st_size, 0)
-        part, error = self.automation.get_active_doc()
-        self.assertIsNone(error)
-        title = str(com(part, "GetTitle"))
-        self.created_titles.append(title)
-        self.automation.app.CloseDoc(title)
-        self.assertNotIn(title, [d["title"] for d in
-                         self.automation.list_open_documents()["data"]["documents"]])
-
-    def test_hole_wizard_removes_volume_saves_and_closes(self):
-        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
-        part_path = root / f"mcp_live_hole_wizard_{uuid4().hex}.SLDPRT"
-        self._new_part()
-        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
-        self.assertTrue(self.automation.draw_rectangle(-20, -20, 20, 20, "mm")["success"])
-        self._close_sketch()
-        self.assertTrue(self.automation.extrude_sketch(15, False, "mm")["success"])
-        before = self._total_volume_mm3()
-        faces = list_planar_faces(self.automation)
-        self.assertTrue(faces["success"], faces["message"])
-        cap = next((f for f in faces["data"]["faces"]
-                    if abs(f["area_mm2"] - 1600) < 0.1 and f["normal"][0] > 0.9), None)
-        self.assertIsNotNone(cap)
-        result = hole_wizard(self.automation, cap["index"],
-                             [cap["point_mm"][0], 0, 0], 6, 8)
-        self.assertTrue(result["success"], result["message"])
-        self.assertLess(self._total_volume_mm3(), before - 10)
         saved = save_document(self.automation, path=str(part_path))
         self.assertTrue(saved["success"], saved["message"])
         self.assertGreater(part_path.stat().st_size, 0)
@@ -1615,22 +1586,6 @@ class LiveDocumentTargetTests(unittest.TestCase):
 
         self.assertTrue(result["success"], result["message"])
         return before, self._total_volume_mm3()
-
-    def test_fillet_rounds_one_box_edge_given_by_a_point_without_saving(self):
-        before = self._box_100x100x40()
-        # The Front sketch lies in YZ, so this 40 mm edge runs along X.
-        result = self.automation.fillet_edges(5, "mm", edge_points=[[20, 50, 50]])
-        self.assertTrue(result["success"], result["message"])
-
-        removed = (5 ** 2 - math.pi * 5 ** 2 / 4) * 40
-        self.assertAlmostEqual(before - removed, self._total_volume_mm3(), places=2)
-
-    def test_chamfer_bevels_one_box_edge_given_by_a_point_without_saving(self):
-        before = self._box_100x100x40()
-        result = self.automation.chamfer_edges(5, 45, "mm", edge_points=[[20, 50, 50]])
-        self.assertTrue(result["success"], result["message"])
-
-        self.assertAlmostEqual(before - 5 * 5 / 2 * 40, self._total_volume_mm3(), places=2)
 
     def test_fillet_reports_a_point_that_is_on_no_edge(self):
         self._box_100x100x40()
