@@ -59,6 +59,9 @@ class LiveGroupedSurfaceTests(unittest.TestCase):
                 saved = save_document(cls.automation, path=str(cls.path))
                 if not saved["success"]:
                     raise AssertionError(saved["message"])
+                # SaveAs renames the document; track the new title so the
+                # finally-block closes it instead of leaking the window.
+                cls.title = cls.path.stem
                 if cls.path.stat().st_size == 0:
                     raise AssertionError("Shared surface part was saved empty.")
         finally:
