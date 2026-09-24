@@ -37,6 +37,8 @@ from solidworks_mcp.tools.patterns import mirror_feature
 from solidworks_mcp.tools.reference_geometry import create_reference_axis, create_reference_plane
 from solidworks_mcp.tools.properties import set_custom_property
 from solidworks_mcp.tools.configurations import create_configuration
+from solidworks_mcp.tools.appearance import set_appearance
+from solidworks_mcp.tools.equations import add_equation
 from solidworks_mcp.tools.body_features import delete_body, scale_body
 from solidworks_mcp.tools.surface_features import cut_with_surface, extend_surface, extrude_surface, knit_surface, offset_surface, planar_surface, revolve_surface, thicken_surface
 from solidworks_mcp.tools.sketch_entities import draw_centerline, draw_circle_radius
@@ -1143,6 +1145,59 @@ class LiveDocumentTargetTests(unittest.TestCase):
         self.assertGreater(part_path.stat().st_size, 0)
         part, error = self.automation.get_active_doc()
         self.assertIsNone(error)
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_set_appearance_on_solid_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_appearance_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
+        extruded = self.automation.extrude_sketch(10, False, "mm")
+        self.assertTrue(extruded["success"], extruded["message"])
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        result = set_appearance(self.automation, 0.2, 0.5, 0.8)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(1, len(com(part, "GetBodies2", 0, True) or []))
+        self.assertAlmostEqual(4000, self._total_volume_mm3(), delta=0.5)
+        self.assertTrue(all(abs(actual - value) < 1 / 255 + 1e-6
+                            for actual, value in zip(result["data"]["rgb"], (0.2, 0.5, 0.8))))
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        self.assertTrue(all(abs(com(part, "MaterialPropertyValues")[i] - value) < 1 / 255 + 1e-6
+                            for i, value in enumerate((0.2, 0.5, 0.8))))
+        title = str(com(part, "GetTitle"))
+        self.created_titles.append(title)
+        self.automation.app.CloseDoc(title)
+        self.assertNotIn(title, [d["title"] for d in
+                         self.automation.list_open_documents()["data"]["documents"]])
+
+    def test_global_equation_on_solid_saves_and_closes(self):
+        root = Path(self.automation._path_policy.output_roots[0]) / "saved"
+        part_path = root / f"mcp_live_equation_{uuid4().hex}.SLDPRT"
+        self._new_part()
+        self.assertTrue(self.automation.create_sketch("Front", exact_geometry=True)["success"])
+        self.assertTrue(self.automation.draw_rectangle(-10, -10, 10, 10, "mm")["success"])
+        extruded = self.automation.extrude_sketch(10, False, "mm")
+        self.assertTrue(extruded["success"], extruded["message"])
+        result = add_equation(self.automation, "MCP_Width", 20)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual("verified", result["data"]["status"])
+        self.assertAlmostEqual(4000, self._total_volume_mm3(), delta=0.5)
+        saved = save_document(self.automation, path=str(part_path))
+        self.assertTrue(saved["success"], saved["message"])
+        self.assertGreater(part_path.stat().st_size, 0)
+        part, error = self.automation.get_active_doc()
+        self.assertIsNone(error)
+        manager = com(part, "GetEquationMgr")
+        self.assertTrue(com(manager, "GlobalVariable", result["data"]["index"]))
+        self.assertIn('"MCP_Width"', com(manager, "Equation", result["data"]["index"]))
         title = str(com(part, "GetTitle"))
         self.created_titles.append(title)
         self.automation.app.CloseDoc(title)

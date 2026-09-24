@@ -22,6 +22,8 @@ from . import surface_features  # noqa: F401
 from . import properties  # noqa: F401
 from . import configurations  # noqa: F401
 from . import body_features  # noqa: F401
+from . import appearance  # noqa: F401
+from . import equations  # noqa: F401
 from . import sketch_edit  # noqa: F401
 from . import sketch_entities  # noqa: F401
 from . import sketch_create  # noqa: F401
@@ -30,4 +32,4 @@ from . import saving  # noqa: F401
 from . import imports  # noqa: F401
 from . import standard_parts  # noqa: F401
 
-__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements", "views", "history", "reference_geometry", "advanced_features", "surface_features", "properties", "configurations", "body_features", "sketch_edit", "sketch_entities", "drawing_annotations", "saving", "imports", "standard_parts"]
+__all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements", "views", "history", "reference_geometry", "advanced_features", "surface_features", "properties", "configurations", "body_features", "appearance", "equations", "sketch_edit", "sketch_entities", "drawing_annotations", "saving", "imports", "standard_parts"]
