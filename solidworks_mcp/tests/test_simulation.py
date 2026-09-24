@@ -309,8 +309,10 @@ class SimulationRegistrationTests(unittest.TestCase):
     def test_force_schema_requires_a_positive_magnitude(self):
         tools = {item.name: item for item in registered_tools()}
         schema = tools["apply_force_load"].inputSchema
-        self.assertEqual(["face_indices", "magnitude_newtons"], schema["required"])
-        self.assertEqual(0, schema["properties"]["magnitude_newtons"]["exclusiveMinimum"])
+        self.assertEqual(["face_indices", "magnitude"], schema["required"])
+        self.assertEqual(0, schema["properties"]["magnitude"]["exclusiveMinimum"])
+        self.assertEqual(["kg", "kgf", "kn", "n", "t"],
+                         schema["properties"]["unit"]["enum"])
 
 
 class CreateStaticStudyTests(unittest.TestCase):
@@ -432,10 +434,45 @@ class ForceLoadTests(unittest.TestCase):
         result = apply_force_load(automation, [2], 1000.0)
 
         self.assertTrue(result["success"], result["message"])
+        self.assertEqual(1000.0, result["data"]["magnitude"])
+        self.assertEqual("n", result["data"]["unit"])
+        self.assertEqual(1.0, result["data"]["conversion_factor"])
+        self.assertEqual(1000.0, result["data"]["force_newtons"])
         self.assertEqual(1000.0, result["data"]["read_back_newtons"])
         self.assertEqual(1, result["data"]["force_type"])
         self.assertEqual(1, result["data"]["face_count"])
         self.assertEqual(1, result["data"]["count_after"])
+
+    @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
+    def test_mass_units_are_converted_to_newtons(self, _lookup):
+        automation = SimulationAutomation()
+        create_static_study(automation, "S1")
+
+        cases = (
+            ("kg", 200.0, 200.0 * 9.80665),
+            ("KG", 1.0, 9.80665),
+            ("t", 2.0, 2.0 * 9806.65),
+            ("kgf", 10.0, 10.0 * 9.80665),
+            ("kN", 1.5, 1500.0),
+        )
+        for unit, amount, expected in cases:
+            with self.subTest(unit=unit):
+                result = apply_force_load(automation, [2], amount, unit=unit)
+                self.assertTrue(result["success"], result["message"])
+                self.assertAlmostEqual(expected, result["data"]["force_newtons"],
+                                       places=6)
+                # What we set is what the add-in stores and reads back.
+                self.assertAlmostEqual(expected, result["data"]["read_back_newtons"],
+                                       places=6)
+
+    def test_unknown_unit_is_rejected_before_com(self):
+        automation = SimulationAutomation()
+
+        result = apply_force_load(automation, [2], 10.0, unit="psi")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("VALIDATION_FAILED", result["data"]["code"])
+        self.assertEqual(0, automation.active_doc_calls)
 
     @patch(FACE_LOOKUP, side_effect=lambda document, index: "face")
     def test_read_back_mismatch_is_a_failure(self, _lookup):
@@ -466,9 +503,10 @@ class ForceLoadTests(unittest.TestCase):
     def test_non_positive_magnitude_is_rejected_before_com(self):
         automation = SimulationAutomation()
 
-        result = apply_force_load(automation, [2], 0.0)
-
-        self.assertFalse(result["success"])
+        for magnitude in (0.0, -1.0):
+            with self.subTest(magnitude=magnitude):
+                result = apply_force_load(automation, [2], magnitude)
+                self.assertFalse(result["success"])
         self.assertEqual(0, automation.active_doc_calls)
 
 

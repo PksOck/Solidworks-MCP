@@ -180,20 +180,32 @@ class LiveSimulationStaticTests(unittest.TestCase):
         self.assertEqual(1, result["data"]["count_after"])
 
     # -- 5.4 ----------------------------------------------------------------
-    def test_apply_force_load_reads_back_the_requested_magnitude(self):
+    def test_apply_force_load_converts_units_and_reads_the_magnitude_back(self):
         self._beam()
         _fixed, loaded = self._end_faces()
         self.assertTrue(create_static_study(self.automation, "MCP Force")["success"])
 
-        result = apply_force_load(self.automation, [loaded], LOAD_NEWTONS,
-                                  study="MCP Force")
-
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual(LOAD_NEWTONS, result["data"]["magnitude_newtons"])
-        self.assertAlmostEqual(LOAD_NEWTONS, result["data"]["read_back_newtons"],
+        # A force unit: 2 kN must be stored as 2000 N.
+        kilonewtons = apply_force_load(self.automation, [loaded], LOAD_NEWTONS / 1000.0,
+                                       unit="kN", study="MCP Force")
+        self.assertTrue(kilonewtons["success"], kilonewtons["message"])
+        self.assertEqual(1000.0, kilonewtons["data"]["conversion_factor"])
+        self.assertAlmostEqual(LOAD_NEWTONS, kilonewtons["data"]["force_newtons"],
                                places=6)
-        self.assertEqual(1, result["data"]["force_type"])
-        self.assertEqual(1, result["data"]["count_after"])
+        self.assertAlmostEqual(LOAD_NEWTONS, kilonewtons["data"]["read_back_newtons"],
+                               places=6)
+        self.assertEqual(1, kilonewtons["data"]["force_type"])
+        self.assertEqual(1, kilonewtons["data"]["count_after"])
+
+        # A mass unit: 200 kg becomes 200 * 9.80665 N in the study.
+        kilograms = apply_force_load(self.automation, [loaded], 200.0, unit="kg",
+                                     study="MCP Force")
+        self.assertTrue(kilograms["success"], kilograms["message"])
+        expected = 200.0 * 9.80665
+        self.assertAlmostEqual(expected, kilograms["data"]["force_newtons"], places=6)
+        self.assertAlmostEqual(expected, kilograms["data"]["read_back_newtons"],
+                               places=6)
+        self.assertEqual(2, kilograms["data"]["count_after"])
 
     # -- 5.5 ----------------------------------------------------------------
     def test_run_analysis_meshes_the_beam_and_solves(self):

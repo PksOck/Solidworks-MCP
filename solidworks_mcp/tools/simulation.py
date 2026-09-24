@@ -36,6 +36,19 @@ SW_SIM_MESH_BEAM = 4
 # swsRestraintType_e
 SW_SIM_RESTRAINT_FIXED = 0
 
+#: Standard gravity in m/s^2, used to turn a mass load into a force.
+SW_SIM_GRAVITY = 9.80665
+
+#: Newtons per unit accepted by ``apply_force_load``. kN and kgf are forces;
+#: kg and t are masses whose weight (m * g) is applied.
+SW_SIM_FORCE_UNITS = {
+    "n": 1.0,
+    "kn": 1000.0,
+    "kgf": SW_SIM_GRAVITY,
+    "kg": SW_SIM_GRAVITY,
+    "t": 1000.0 * SW_SIM_GRAVITY,
+}
+
 # swsForceType_e / swsSelectionType_e
 SW_SIM_FORCE_NORMAL = 1
 SW_SIM_SELECTION_FACE_EDGE_VERTEX_POINT = 0
@@ -407,31 +420,46 @@ def apply_fixed_fixture(sw, face_indices: List[int], study: Optional[str] = None
 @tool(
     name="apply_force_load",
     description=(
-        "Apply a normal force load of the given magnitude in newtons to "
-        "planar faces of the active part and verify the load count, type and "
-        "stored value."
+        "Apply a normal force load to planar faces of the active part and "
+        "verify the load count, type and stored value. The magnitude may be "
+        "given in a force unit (N, kN, kgf) or as an equivalent mass (kg, t) "
+        "that is converted with g = 9.80665 m/s2."
     ),
     schema={"type": "object", "properties": {
         "face_indices": {
             "type": "array", "minItems": 1, "items": {"type": "integer"},
             "description": "Planar-face indices from list_planar_faces."},
-        "magnitude_newtons": {
+        "magnitude": {
             "type": "number", "exclusiveMinimum": 0,
-            "description": "Force magnitude in newtons, applied normal to the faces."},
+            "description": "Load magnitude, interpreted with unit; applied normal to the faces."},
+        "unit": {
+            "type": "string", "enum": sorted(SW_SIM_FORCE_UNITS),
+            "description": ("N, kN and kgf are forces; kg and t are masses whose "
+                            "weight is used (m * 9.80665). Default N.")},
         "study": {"type": "string",
                   "description": "Study name; defaults to the newest study."},
-    }, "required": ["face_indices", "magnitude_newtons"]},
+    }, "required": ["face_indices", "magnitude"]},
     operation_class=OperationClass.MUTATE,
 )
-def apply_force_load(sw, face_indices: List[int], magnitude_newtons: float,
-                     study: Optional[str] = None) -> dict:
-    if (not isinstance(magnitude_newtons, (int, float))
-            or isinstance(magnitude_newtons, bool)
-            or not math.isfinite(float(magnitude_newtons))
-            or float(magnitude_newtons) <= 0):
-        return sw._result(False, "magnitude_newtons must be a positive number.",
+def apply_force_load(sw, face_indices: List[int], magnitude: float,
+                     unit: str = "N", study: Optional[str] = None) -> dict:
+    if (not isinstance(magnitude, (int, float)) or isinstance(magnitude, bool)
+            or not math.isfinite(float(magnitude)) or float(magnitude) <= 0):
+        return sw._result(False, "magnitude must be a positive number.",
                           SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
-    magnitude = float(magnitude_newtons)
+    if not isinstance(unit, str) or unit.strip().casefold() not in SW_SIM_FORCE_UNITS:
+        return sw._result(
+            False, "unit must be one of "
+                   + ", ".join(sorted(SW_SIM_FORCE_UNITS)) + ".",
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED", "unit": unit})
+    unit_key = unit.strip().casefold()
+    factor = SW_SIM_FORCE_UNITS[unit_key]
+    amount = float(magnitude)
+    newtons = amount * factor
+    if not math.isfinite(newtons) or newtons <= 0:
+        return sw._result(False, "The converted force must be a positive number.",
+                          SwErrors.swInvalidInput, {"code": "VALIDATION_FAILED"})
     error = _check_indices(sw, face_indices)
     if error:
         return error
@@ -462,24 +490,27 @@ def apply_force_load(sw, face_indices: List[int], magnitude_newtons: float,
                 {"code": "FORCE_NOT_CREATED",
                  "simulation_error_code": int(errors.value)})
         com(force, "ForceBeginEdit")
-        set_com(force, "NormalForceOrTorqueValue", magnitude)
+        set_com(force, "NormalForceOrTorqueValue", newtons)
         end_code = int(com(force, "ForceEndEdit"))
         after = int(com(manager, "Count"))
         force_type = int(com(force, "ForceType"))
         read_back = float(com(force, "NormalForceOrTorqueValue"))
         if (end_code != 0 or after != before + 1
                 or force_type != SW_SIM_FORCE_NORMAL
-                or abs(read_back - magnitude) > max(1e-6, magnitude * 1e-6)):
+                or abs(read_back - newtons) > max(1e-6, newtons * 1e-6)):
             return sw._result(
                 False, "The force load did not read back the requested magnitude.",
                 SwErrors.swSimulationError,
                 {"code": "FORCE_NOT_VERIFIED", "count_before": before,
                  "count_after": after, "force_type": force_type,
                  "force_edit_error": end_code,
-                 "magnitude_newtons": magnitude, "read_back_newtons": read_back})
+                 "magnitude": amount, "unit": unit_key,
+                 "force_newtons": newtons, "read_back_newtons": read_back})
         return sw._result(True, "Applied a normal force load.", data={
             "study": str(com(target, "Name")),
-            "magnitude_newtons": magnitude, "read_back_newtons": read_back,
+            "magnitude": amount, "unit": unit_key,
+            "conversion_factor": factor, "force_newtons": newtons,
+            "read_back_newtons": read_back,
             "force_type": force_type, "face_count": len(faces),
             "count_before": before, "count_after": after,
         })
