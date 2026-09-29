@@ -19,7 +19,8 @@
   "output_roots": [
     "C:\\Users\\Jan\\Documents\\Claude-Solidworks mcp\\output",
     "C:\\Users\\Jan\\Documents\\SolidWorks MCP Output",
-    "C:\\Users\\Jan\\Documents\\Claude-Solidworks mcp\\solidworks_mcp\\standard_library"
+    "C:\\Users\\Jan\\Documents\\Claude-Solidworks mcp\\solidworks_mcp\\standard_library",
+    "C:\\Users\\Jan\\Documents\\SolidWorks-projekti MCP\\output"
   ],
   "protected_roots": [
     "C:\\Users\\Jan\\Documents\\GrabCAD"
