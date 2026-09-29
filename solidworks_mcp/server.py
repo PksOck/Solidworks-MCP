@@ -30,7 +30,8 @@ from uuid import uuid4
 # MCP imports
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import ImageContent, Tool, TextContent
+from mcp.types import ImageContent, Tool, TextContent, Resource
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 
 # Local imports
 from .automation import SolidWorksAutomation
@@ -42,6 +43,7 @@ from .core.contracts import OperationError, OperationResult, OperationStatus
 from .core.evidence import OperationJournal
 from .core.session import TargetMismatchError
 from .registry import registered_tools, dispatch, operation_class_for
+from .knowledge import library as modeling_guidance
 from .utils import get_solidworks_info, set_default_unit
 
 # Configure logging
@@ -60,11 +62,12 @@ logger = logging.getLogger("SolidWorksMCP")
 # ============================================================================
 
 sw_automation = SolidWorksAutomation()
-server = Server("solidworks-mcp-server")
+server = Server("solidworks-mcp-server", instructions=modeling_guidance.server_instructions())
 operation_journal = OperationJournal()
 _operation_payloads: Dict[str, Dict] = {}
 
 _LEGACY_OPERATION_CLASSES = {
+    "get_modeling_guide": OperationClass.READ,
     "save_document": OperationClass.MUTATE,
     "close_document": OperationClass.MUTATE,
     "create_sketch": OperationClass.MUTATE,
@@ -128,6 +131,18 @@ def _with_operation_id(tool_definition: Tool) -> Tool:
 async def list_tools() -> list[Tool]:
     """List all available SolidWorks tools"""
     tools = [
+        Tool(
+            name="get_modeling_guide",
+            description=(
+                "Read SolidWorks expert guidance and ordered modeling workflows. "
+                "Use topic='index' to choose a topic before modeling; returns relevant "
+                "currently advertised tools and recorded evidence. Read-only, no CAD connection needed."
+            ),
+            inputSchema={"type": "object", "properties": {
+                "topic": {"type": "string", "default": "index",
+                          "description": "Exact topic ID from index, e.g. workflow/part, workflow/weldment, expert."}
+            }, "additionalProperties": False},
+        ),
         # Connection Tools
         Tool(
             name="connect_solidworks",
@@ -467,6 +482,28 @@ async def list_tools() -> list[Tool]:
 # Result Formatter
 # ============================================================================
 
+@server.list_resources()
+async def list_modeling_resources() -> list[Resource]:
+    entries = [{"id": "index", "title": "SolidWorks modeling guide index",
+                "uri": modeling_guidance.URI_PREFIX + "index"}] + modeling_guidance.catalog()
+    return [Resource(uri=entry["uri"], name=entry["id"],
+                     description=entry["title"], mimeType="application/json")
+            for entry in entries]
+
+
+async def _modeling_guide_payload(topic: str) -> dict:
+    advertised = {tool.name for tool in await list_tools()}
+    return modeling_guidance.read_topic(topic, advertised)
+
+
+@server.read_resource()
+async def read_modeling_resource(uri) -> list[ReadResourceContents]:
+    topic = modeling_guidance.topic_for_uri(str(uri))
+    payload = await _modeling_guide_payload(topic)
+    return [ReadResourceContents(content=json.dumps(payload, ensure_ascii=False),
+                                 mime_type="application/json")]
+
+
 def format_result(r: Dict) -> str:
     """Format result dictionary as readable text"""
     status = "SUCCESS" if r["success"] else "ERROR"
@@ -567,6 +604,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         if guard_error is not None:
             result = guard_error
 
+        elif name == "get_modeling_guide":
+            try:
+                payload = await _modeling_guide_payload(arguments.get("topic", "index"))
+                result = sw_automation._result(True, "Modeling guide loaded; no CAD operations executed.",
+                                               SwErrors.swSuccess, payload)
+            except ValueError as error:
+                result = sw_automation._result(False, str(error), SwErrors.swInvalidInput)
+
         elif name == "connect_solidworks":
             result = sw_automation.connect()
         
@@ -610,6 +655,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                     "solidworks_build": sw_build,
                     "advertised_tools": advertised,
                     "blocked_capabilities": blocked,
+                    "modeling_guidance": {"tool": "get_modeling_guide", "topic": "index",
+                                          "resource": "solidworks://guides/index"},
                 }
             }
 

@@ -169,6 +169,14 @@ class ScratchPartTestCase(unittest.TestCase):
             total += com(body, "GetMassProperties", 0.0)[3] * 1e9
         return total
 
+    def total_solid_faces(self):
+        """Face count across every solid body, the second geometric proof."""
+        total = 0
+        for body in com(self.document(), "GetBodies2", 0, True) or []:
+            self._keep(body)
+            total += len(com(body, "GetFaces") or [])
+        return total
+
     # -- sketches ----------------------------------------------------------
     def new_sketch(self, plane="Front", exact_geometry=True):
         """Create one sketch and return its feature name.

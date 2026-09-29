@@ -1,5 +1,5 @@
 {
-  "exe_path": "auto",
+  "exe_path": "C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe",
   "part_template": "auto",
   "assembly_template": "auto",
   "drawing_template": "auto",
@@ -14,5 +14,14 @@
   "default_chamfer_distance": 2.0,
   "default_circle_radius": 25.0,
   "capture_width": 1920,
-  "capture_height": 1080
+  "capture_height": 1080,
+  "guarded_mode": true,
+  "output_roots": [
+    "C:\\Users\\Jan\\Documents\\Claude-Solidworks mcp\\output",
+    "C:\\Users\\Jan\\Documents\\SolidWorks MCP Output",
+    "C:\\Users\\Jan\\Documents\\Claude-Solidworks mcp\\solidworks_mcp\\standard_library"
+  ],
+  "protected_roots": [
+    "C:\\Users\\Jan\\Documents\\GrabCAD"
+  ]
 }

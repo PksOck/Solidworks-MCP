@@ -1,10 +1,17 @@
 # 🚀 SolidWorks MCP Development Roadmap
 ## Building the Most Robust SolidWorks MCP Server
 
-**Project:** SolidWorks MCP Server  
-**Author:** Samsaam Ali Baig  
-**Start Date:** January 2026  
-**Target:** Production-Ready v3.0
+- **Project:** SolidWorks MCP Server
+- **Original author:** Samsaam Ali Baig
+- **Additional development and 2026 progress updates:** PksOck
+- **Start Date:** January 2026
+- **Target:** Production-Ready v3.0
+
+The original roadmap and its code examples are Samsaam Ali Baig's work.
+PksOck is developing the additional tools and tests on `additional-upgrades`.
+The updates recorded here describe work in that branch; they are not yet part
+of the original author's project. The changes will be cleaned up into one PR
+for the original author's review.
 
 ---
 
@@ -31,9 +38,10 @@
 Create the most comprehensive, reliable, and user-friendly MCP server for SolidWorks automation that enables AI assistants to perform complex CAD operations through natural language commands.
 
 ## 1.2 Success Criteria
-- [ ] 50+ automation tools covering all major SolidWorks operations
+- [x] 50+ automation tools (145 in the live MCP catalog on 2026-09-24;
+  unfinished operation families remain in the Parts coverage plan)
 - [ ] 99% connection reliability
-- [ ] Support for Parts, Assemblies, and Drawings
+- [x] Support for Parts, Assemblies, and Drawings (see §12.1 for remaining gaps)
 - [ ] Simulation integration
 - [ ] Unit-agnostic input (mm, inch, meter)
 - [ ] Comprehensive error recovery
@@ -50,6 +58,13 @@ Create the most comprehensive, reliable, and user-friendly MCP server for SolidW
 # 2. CURRENT STATE ANALYSIS
 
 ## 2.1 Version 2.3 Inventory
+
+> **Historical baseline (as of January 2026).** This section describes the
+> original v2.3 server and is kept as the starting point for the roadmap — it is
+> not the current state. For the live, generated capability state as of
+> 24 September 2026 see §12 (Progress Tracking) and
+> `docs/upgrade/specs/CAPABILITY-REGISTER.md`. The code examples throughout
+> §4–§11 are the original design drafts and are not rewritten here.
 
 ### Current Tools (11)
 | # | Tool | Category | Status |
@@ -107,6 +122,9 @@ Create the most comprehensive, reliable, and user-friendly MCP server for SolidW
 
 ## 3.1 Phase Overview
 
+The week-by-week diagram below is the original January 2026 schedule;
+current progress and priorities are in §12.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    DEVELOPMENT TIMELINE                          │
@@ -133,6 +151,11 @@ Create the most comprehensive, reliable, and user-friendly MCP server for SolidW
 | Phase 4 | +8 | 46 | Full CAD |
 | Phase 5 | +6 | 52 | Simulation |
 | Phase 6 | +3 | 55 | Production |
+
+> These are the original January 2026 targets, not the current tool inventory.
+> Before the next M2/M3 additions on 24 September 2026, the live MCP catalog
+> contained 144 tools. See §12 for the verified capability register and
+> `docs/upgrade/PARTS-COVERAGE-PLAN.md` for unfinished M2/M3 commands.
 
 ---
 
@@ -1476,6 +1499,15 @@ def create_plane(self, offset=0, reference="Front", unit="mm") -> Dict:
 - [ ] Add drawing views
 - [ ] Add dimensions to drawings
 
+> **Status as of 2026-09-24:** assembly creation, component insertion and the
+> three mates (`4.1`–`4.5`), the drawing view tool `4.7`
+> (`add_standard_3_view`), the drawing dimension tool `4.8`
+> (`add_drawing_dimension`) and the cut-list table `F` are live-verified in
+> `scripts/capability_requirements.json`. No original numbered Phase 4
+> requirement is absent any more, and the `D1` marked-vs-unmarked dimension
+> filter is proven live (`insert_marked_dimensions` now uses
+> `InsertModelAnnotations4`; see `docs/api-findings.md` §58).
+
 ### 7.2 Assembly Tools
 
 #### Task 4.1: Create Assembly
@@ -1842,13 +1874,17 @@ def add_drawing_dimension(self, entity1, entity2=None, x=0, y=0) -> Dict:
 | 7 | add_drawing_view | Drawing | HIGH |
 | 8 | add_drawing_dimension | Drawing | MEDIUM |
 
+Status as of 2026-09-24: rows 1–5, 7 and 8 are live-verified (the implemented
+names are `create_new_assembly`, `insert_component`, `mate_coincident`,
+`mate_concentric`, `mate_distance`, `add_standard_3_view` and
+`add_drawing_dimension`); row 6 is automation-only (`4.6`, internal_only).
+
 ### 7.5 Phase 4 Deliverables
-- [ ] 8 new tools (46 total)
-- [ ] Full assembly support
-- [ ] Basic mate types
-- [ ] Drawing creation
-- [ ] Drawing views
-- [ ] Basic dimensioning
+- [x] Assembly tools — `create_new_assembly`, `insert_component` live-verified
+- [x] Basic mate types — `mate_coincident`, `mate_concentric`, `mate_distance` live-verified
+- [x] Drawing creation — `create_new_drawing` (automation, internal_only)
+- [x] Drawing views — `add_standard_3_view`, `list_drawing_views` live-verified
+- [x] Basic dimensioning — `add_drawing_dimension` (`4.8`) live-verified
 
 ---
 
@@ -1927,7 +1963,11 @@ def apply_material(self, material_name, library="solidworks materials") -> Dict:
     
     return self._result(True, f"Applied material: {material_name}", SwErrors.swSuccess)
 ```
-**Status:** [ ] Not Started
+**Status:** [x] Implemented and `current_live` (as of 2026-09-24). The registered
+tool `apply_material` applies a material to the active configuration and is
+live-verified (material read back; density/mass consistent with the geometry).
+This is material assignment only, **not** a Simulation study: `create_static_study`,
+fixtures, loads, run and results (`5.1`, `5.3`–`5.6`) remain absent. See §12.3.
 
 ---
 
@@ -2120,12 +2160,17 @@ def get_stress_results(self) -> Dict:
 | 5 | run_simulation | Simulation | HIGH |
 | 6 | get_stress_results | Simulation | HIGH |
 
+Status as of 2026-09-24: only `apply_material` (`5.2`) is implemented and
+live-verified. It assigns a material to the active configuration and does **not**
+create or run a Simulation study. `create_static_study`, `apply_fixed_fixture`,
+`apply_force_load`, `run_analysis` and `get_stress_results` (`5.1`, `5.3`–`5.6`)
+remain absent and are deferred.
+
 ### 8.4 Phase 5 Deliverables
-- [ ] 6 new tools (52 total)
-- [ ] Static analysis workflow
-- [ ] Material assignment
-- [ ] Boundary conditions
-- [ ] Results extraction
+- [ ] Static analysis workflow — deferred (`5.1`, `5.3`–`5.6` absent)
+- [x] Material assignment — `apply_material` (`5.2`) live-verified (assignment only)
+- [ ] Boundary conditions — deferred
+- [ ] Results extraction — deferred
 
 ---
 
@@ -2626,47 +2671,59 @@ Draw a circle in the active sketch.
 
 ## 12.1 Phase Checklist
 
-### Phase 1: Foundation [ ]
-- [ ] Project structure created
-- [ ] Configuration system
-- [ ] Unit conversion
-- [ ] Auto-detect SolidWorks
-- [ ] 5 new tools
+Status below is grounded in the generated capability register
+(`docs/upgrade/specs/CAPABILITY-REGISTER.md`), which is derived from
+`scripts/capability_requirements.json`. Registration and live verification are
+separate: a checked box means the capability is registered and implemented, not
+that it has live COM evidence.
 
-### Phase 2: Core Features [ ]
-- [ ] Arc tools
-- [ ] Spline tool
-- [ ] Polygon tool
-- [ ] Cut extrude
-- [ ] Fillet/Chamfer
-- [ ] Revolve
-- [ ] Measurements
+### Phase 1: Foundation [DONE]
+- [x] Project structure created — `1.1` internal_only (`registry.registered_tools`)
+- [x] Configuration system — `1.2` internal_only (`config.get_config`)
+- [x] Unit conversion — `1.3` registered (`set_units`)
+- [x] Auto-detect SolidWorks — `1.4` registered (`get_solidworks_info`)
+- [x] 5 new tools — `1.5` registered, current_live (`get_capabilities`)
+- Evidence: `1.5` `get_capabilities` is current_live; `set_units` and `get_solidworks_info` are registered (static_only); structure and config are internal_only.
 
-### Phase 3: Advanced [ ]
-- [ ] Sweep
-- [ ] Loft
-- [ ] Patterns
-- [ ] Shell
-- [ ] Export tools
+### Phase 2: Core Features [DONE]
+- [x] Arc tools — `draw_arc`, `draw_arc_3point` (`2.1`, current_live)
+- [x] Spline tool — `draw_spline` (`2.2`, current_live)
+- [x] Polygon tool — `draw_polygon` (`2.3`, current_live)
+- [x] Cut extrude — `cut_extrude` (`2.5`, current_live)
+- [x] Fillet/Chamfer — `fillet_edges`, `chamfer_edges` (`2.6`, `2.7`, current_live)
+- [x] Revolve — `revolve_sketch` (`2.8`, current_live)
+- [x] Measurements — `measure_distance` (`2.9`), `get_mass_properties` (`2.summary.mass`), both current_live. (`2.4` `draw_slot` is also current_live.)
+- Evidence: `2.1`–`2.9` are all registered and current_live.
 
-### Phase 4: Assembly & Drawing [ ]
-- [ ] Assembly support
-- [ ] Mates
-- [ ] Drawing support
-- [ ] Views & dimensions
+### Phase 3: Advanced [DONE]
+- [x] Sweep — `sweep_sketch` (`3.1`, current_live)
+- [x] Loft — `loft_sketches` (`3.2`, current_live)
+- [x] Patterns — `linear_pattern`, `circular_pattern` (`3.3`, `3.4`) and `mirror_feature` (`3.5`), all current_live
+- [x] Shell — `shell_feature` (`3.6`, current_live)
+- [x] Export tools — `export_step` (`3.7`), `export_stl` (`3.8`) and `export_face_to_dxf` (`3.9`, superseded) all current_live
+- Evidence: `3.1`–`3.10` are registered and current_live; `3.9` is superseded by the explicit DXF tools.
 
-### Phase 5: Simulation [ ]
-- [ ] Static study
-- [ ] Materials
-- [ ] Loads & fixtures
-- [ ] Results
+### Phase 4: Assembly & Drawing [PARTIAL]
+- [x] Assembly support — `create_new_assembly` (`4.1`), `insert_component` (`4.2`), both current_live
+- [x] Mates — `mate_coincident`, `mate_concentric`, `mate_distance` (`4.3`–`4.5`), all current_live
+- [x] Drawing support — `create_new_drawing` exists in automation (`4.6`, internal_only, not exposed as an MCP tool); `add_standard_3_view` (`4.7`, current_live); `list_drawing_views` and `insert_cut_list_table` (`F`, current_live) are registered
+- [x] Views & dimensions — `add_drawing_dimension` (`4.8`) is now live-verified (auto-dimensioning a view)
+- Evidence (as of 2026-09-24): `4.1`–`4.5`, `4.7` and `4.8` are current_live in `scripts/capability_requirements.json` (assembly created with components and mates; standard views plus a cut-list table on a saved weldment drawing; a model view gaining drawing dimensions). `4.6` stays internal_only. The `D1` marked-vs-unmarked dimension filter is also live-verified: only the marked dimension is imported, and the counterpart option imports only the unmarked one.
 
-### Phase 6: Production [ ]
-- [ ] Error recovery
-- [ ] Validation
-- [ ] Performance
-- [ ] Tests
-- [ ] Documentation
+### Phase 5: Simulation [DEFERRED — out of the active plan]
+- [ ] Static study — `create_static_study` (`5.1`) absent
+- [x] Materials — `apply_material` (`5.2`) registered and current_live (material assignment only; no study is created)
+- [ ] Loads & fixtures — `apply_fixed_fixture` (`5.3`), `apply_force_load` (`5.4`) absent
+- [ ] Results — `run_analysis` (`5.5`), `get_stress_results` (`5.6`) absent
+- Evidence (as of 2026-09-24): `5.2` `apply_material` is implemented and verified live (material read back in the active configuration; density/mass consistent). The rest of Phase 5 (`5.1`, `5.3`–`5.6`) is absent / not_run: applying a material does not run a Simulation study. Simulation is deferred, not deleted; the Phase 5 documentation below is kept for later.
+
+### Phase 6: Production [DONE]
+- [x] Error recovery — `connect_solidworks` (`6.1`, registered, static_only)
+- [x] Validation — input validation (`6.2`, internal_only)
+- [x] Performance — bounded traversal (`6.3`) registered and live-verified
+- [x] Tests — unit tests plus opt-in live COM tests in `solidworks_mcp/tests`
+- [x] Documentation — `HANDOFF.md` and `docs/api-findings.md`
+- Evidence (as of 2026-09-24): `6.3` bounded traversal is live-verified (`inspect_document` depth 1..32 and paging, `list_components` depth); `6.4` `undo`/`redo`, `6.5` `capture_view` and `6.6` `set_view`/`zoom_fit` are current_live; `6.1` `connect_solidworks` remains registered static_only. No numbered Phase 6 item is absent any more.
 
 ## 12.2 Weekly Log Template
 
@@ -2691,6 +2748,135 @@ Draw a circle in the active sketch.
 - [ ] Task 6
 ```
 
+## 12.3 Delivered vs Remaining (2026-09-24)
+
+This section records PksOck's work in the `additional-upgrades` branch after
+the verification recorded in `scripts/capability_requirements.json`. It does
+not describe an upstream release. As of
+24 September 2026 the generated register covers **138 requirement rows**:
+registered 122, internal_only 4, superseded 1, blocked 4, absent 6, partial 1.
+The one `partial` row is the new backlog item `B20` (fast and detailed
+traversal for large assemblies): `list_components` exists but only in the
+detailed mode. `B18` `save_document` is `registered`. By verification
+status: current_live 118, static_only 9, not_run 7, failed 4.
+
+### Delivered
+
+**PART**
+- Documents & utility (foundation): `create_new_part`, `open_document`, `close_document`, `get_document_info`, `list_open_documents`, `connect_solidworks`, `get_capabilities`, `bind_active_document`, `get_solidworks_info`, `set_units`, `undo`, `redo`, `set_view`, `zoom_fit`, `capture_view`
+- Sketching: `create_sketch`, `create_sketch_on_face`, `draw_line`, `draw_circle`, `draw_rectangle`, `draw_arc`, `draw_arc_3point`, `draw_spline`, `draw_polygon`, `draw_slot`, `close_sketch`, `get_sketch_status`
+- Sketch editing: `trim_entities`, `extend_entities`
+- Features: `extrude_sketch`, `cut_extrude`, `revolve_sketch`, `fillet_edges`, `chamfer_edges`, `sweep_sketch`, `loft_sketches`, `shell_feature`
+- Patterns: `linear_pattern`, `circular_pattern`, `mirror_feature`
+- Reference geometry: `create_reference_plane`
+- Measurement & inspection: `measure_distance`, `get_body_bounding_box`, `get_mass_properties`, `list_features`, `list_planes`, `list_planar_faces`, `inspect_document`
+- Export: `export_step`, `export_stl`, `export_face_to_dxf`
+
+**ASSEMBLY**
+- Assembly creation: `create_new_assembly`
+- Components: `insert_component`, `list_components`, `list_component_faces`
+- Mates: `mate_coincident`, `mate_concentric`, `mate_distance`, `list_mates`
+
+**DRAWING**
+- Drawing documents: `create_new_drawing` (automation; `4.6`, internal_only)
+- Views: `create_new_drawing` output plus `add_standard_3_view`, `list_drawing_views`
+- Annotation: `insert_marked_dimensions`, `auto_balloon`
+
+**EXTENSIONS**
+- Weldments: `list_weldment_profiles`, `create_structural_member`
+- Sheet metal: `get_sheet_metal_info`, `flatten_sheet_metal`, `get_flat_pattern_info`, `export_flat_pattern`
+- Cut lists: `get_cut_list`, `insert_cut_list_table`
+- Drawing annotations: `insert_marked_dimensions`, `auto_balloon`
+- Guarded saving: `save_document`
+
+**REGISTERED EXTENSION REQUIREMENTS M1/M2/M3 (as of 2026-09-24)**
+- **M1 (sketching)** — 36 rows, 35 current_live, 1 not_run (`M1.1-k` perimeter/3-point circle is `absent` because the SW 2025 API exposes no such call). Covers centerline/point, circles and rectangles, ellipse/elliptical arc/parabola, tangent arc, arc slots, equation curves (2D and 3D), sketch fillet/chamfer, offset/mirror/split/scale/rotate/toggle-construction, relations and driving dimensions, sketch text, convert entities, and 2D/3D sketch creation.
+- **M2 (advanced solid features)** — 21 rows: 20 current_live and 1 blocked (`M2.4-f` Split). Revolve/sweep/loft/boundary as cuts, draft, rib, dome, Hole Wizard, reference axis, custom properties, configurations, equations, appearance, coordinate systems, scale/move-copy/delete body, combine bodies, and Insert Part have live evidence.
+- **M3 (surfaces)** — 14 rows: 12 current_live and 2 blocked (Standard and Mutual Trim Surface). Planar/extrude/revolve/offset/loft/sweep/filled/knit/ruled/extend surface, thicken, and cut with surface have live evidence.
+
+Combined, the currently recorded M1/M2/M3 requirements contribute 71 rows,
+67 of them current_live; `M1.1-k` is absent by API, while `M2.4-f` Split and
+`M3-m`/`M3-n` Trim are blocked in the tested COM workflows. This count is **not** the
+coverage of every command in the Parts plan: additional M2/M3 functionality
+still needs implementation and its own unit/live evidence (see below).
+
+### Remaining
+
+| ID | Capability | Tool | Status | One-line reason |
+|---|---|---|---|---|
+| B20 | Fast / detailed traversal for large assemblies | `list_components` | partial | `list_components` has only the detailed mode; on a 77-instance assembly it takes ~124 s at `depth=32` while `depth=1` takes 0.17 s. Backlog item; plan and measurements in `docs/upgrade/PERFORMANCE-LARGE-ASSEMBLIES.md`. |
+| 5.1 | Create static study | `create_static_study` | absent | Simulation / analysis is intentionally deferred. |
+| 5.3 | Apply fixed fixture | `apply_fixed_fixture` | absent | Simulation / analysis is intentionally deferred. |
+| 5.4 | Apply force load | `apply_force_load` | absent | Simulation / analysis is intentionally deferred. |
+| 5.5 | Run analysis | `run_analysis` | absent | Simulation / analysis is intentionally deferred. |
+| 5.6 | Read stress results | `get_stress_results` | absent | Simulation / analysis is intentionally deferred. |
+| B19 | Pack and Go / independent copy | `pack_and_go` | blocked | Register marks it `blocked` / `failed`; deliberately not attempted. |
+| M2.4-f | Split body | `split_body` | blocked | `PreSplitBody2` reports both halves, but `PostSplitBody2` does not create a Split feature with pywin32; see `docs/api-findings.md` §54. |
+| M3-m / M3-n | Trim Surface Standard / Mutual | `trim_surface` | blocked | Both `PreTrimSurface` modes return True, but `PostTrimSurface` creates no feature and changes no sheet area; see `docs/api-findings.md` §56. |
+
+The register has no `partial` implementation status as of 2026-09-24. `B18`
+(`save_document`) is now `registered` with `current_live` verification; the
+registered MCP tool exists next to the older automation method. `5.2`
+(`apply_material`) was previously listed as remaining and is now delivered
+(`registered`, `current_live`) — material assignment only, without a Simulation
+study.
+
+### Priority order for the next work (as of 2026-09-24)
+
+1. **PART extensions (active)** — continue the unfinished M2/M3 commands in
+   `docs/upgrade/PARTS-COVERAGE-PLAN.md`: Save Bodies,
+   curve/sketch/table/fill patterns, additional Fillet/Chamfer/Hole Wizard
+   modes, Wrap/Intersect/Thread, and Boundary/Untrim/Replace/Delete/
+   Flatten Surface. Each new supported mode needs a separate geometric live
+   test. Reference Point, Split and both Trim Surface modes remain blocked
+   in the tested COM workflows (`docs/api-findings.md` §§42, 54, 56). The 21 M2 and 14 M3 rows above are only the
+   capabilities already entered in the requirement register.
+2. **DRAWING (done)** — `4.8` (`add_drawing_dimension`) and the `D1`
+   marked-vs-unmarked dimension filter are both implemented and live-verified
+   (`docs/api-findings.md` §§57–58). `insert_marked_dimensions` was corrected to
+   use `IDrawingDoc.InsertModelAnnotations4`, which actually filters; the
+   earlier `InsertModelDimensions(32768)` imported every dimension. The
+   remaining drawing items in the Parts plan are BOM tables, tolerances,
+   datums and surface finish.
+3. **PRODUCTION (done)** — `6.3` bounded traversal is registered and
+   live-verified: `inspect_document` (depth 1..32, page_size 1..500),
+   `inspect_feature_tree(max_depth)` and `list_components(depth)` all stop at
+   the requested depth, and paging returns a `next_cursor` until the last page.
+   See `docs/upgrade/research-bounded-traversal-6.3.md`. The only optional
+   follow-up is live evidence for the still-`static_only` foundation tools
+   `1.3` (`set_units`), `1.4` (`get_solidworks_info`) and `6.1`
+   (`connect_solidworks`).
+4. **LARGE ASSEMBLIES (backlog, `B20`)** — add a fast and a detailed mode to
+   `list_components`. On a real 77-instance assembly `depth=32` costs ~124 s
+   while `depth=1` costs 0.17 s, because every COM member on a nested component
+   costs ~0.08 s. The fast mode should read only `Name2`/`GetPathName` and
+   recurse only into `.SLDASM` children (identifying sub-assemblies by path, not
+   by the expensive `GetChildren` call). Measurements, design and guidance for
+   choosing a mode are in `docs/upgrade/PERFORMANCE-LARGE-ASSEMBLIES.md`.
+5. **SIMULATION (Phase 5)** — `5.2` (`apply_material`) is implemented and live,
+   but the study workflow `5.1`, `5.3`–`5.6` stays explicitly deferred and out
+   of the active plan.
+6. **BLOCKED** — `B19` (`pack_and_go`), `M2.4-f` (`split_body`) and
+   `M3-m`/`M3-n` (`trim_surface`) remain blocked/failed. Do not retry their
+   COM calls without a different approach.
+
+Live COM verification is this project's definition of done: a capability counts
+as delivered only once the registered tool has been exercised against
+SolidWorks and the evidence is recorded in `scripts/capability_requirements.json`.
+After a change, run the focused live test and the appropriate unit regression
+suite; re-run broader live tests when shared model state or behavior changes.
+
+## 12.4 Live verification status
+
+Based strictly on the `verification_status` fields in the generated register
+(`docs/upgrade/specs/CAPABILITY-REGISTER.md`, derived from
+`scripts/capability_requirements.json`):
+
+- **current_live (118 rows)** — the large majority. It includes Phase 1–3 core geometry (with `3.7`–`3.10` exports/reference plane now live), the Phase 4 assembly block `4.1`–`4.5`, drawing view `4.7`, `4.8` `add_drawing_dimension` and the `D1` marked-dimension filter, `5.2` `apply_material`, production tools `6.3` (bounded traversal) and `6.4`–`6.6`, extensions `B18`, `C`, `D`, `D2`, `E`, `F`, `G`, and every **currently registered** M1/M2/M3 requirement row except `M1.1-k` and blocked `M2.4-f`, `M3-m` and `M3-n`. The Parts plan lists further commands not yet represented by requirement rows.
+- **static_only (9 rows)** — implemented but not yet live-verified: `1.1`/`1.2` (internal_only), `1.3` `set_units`, `1.4` `get_solidworks_info`, `1.5-a`/`1.5-b`, `4.6` `create_drawing` (internal_only), `6.1` `connect_solidworks` and `6.2` (internal_only).
+- **not_run (7 rows)** - the absent capabilities `5.1`, `5.3`-`5.6` and `M1.1-k`, plus the `partial` backlog item `B20` (fast/detailed traversal for large assemblies; `docs/upgrade/PERFORMANCE-LARGE-ASSEMBLIES.md`).
+- **failed (4 rows)** — `B19` `pack_and_go`, `M2.4-f` `split_body` and `M3-m`/`M3-n` `trim_surface` (blocked).
+
 ---
 
 # 13. RESOURCES
@@ -2709,16 +2895,171 @@ Draw a circle in the active sketch.
 
 ---
 
+# 13.4 Additional Focus Areas (Weldments, Sheet Metal, Cut Lists)
+
+This roadmap (as authored) does not cover Weldments, Sheet Metal, or Cut
+Lists. A separate research brief for these areas — driven by actual
+end-user workflow (weldment profiles, sheet metal, assembly, drawings/cut
+lists) — is tracked in `docs/opus-research-brief.md` on the
+`additional-upgrades` branch. Treat it as a parallel extension to Phase 4
+(Assembly & Drawing Support) rather than a replacement.
+
+## 13.5 Weldments/Features and Sheet Metal execution backlog (2026-09-25)
+
+This is **planned scope, not a claim of implementation**. The historical
+inventory in §12 is a snapshot from 24 September; for current, per-capability
+live evidence use `scripts/capability_requirements.json`. Do not add these
+planned rows to its `current_live` set before a registered MCP tool, a focused
+unit test and a successful live test exist. The detailed M2/M3 backlog remains
+in `docs/upgrade/PARTS-COVERAGE-PLAN.md`.
+
+**Definition of done for each supported mode:** verify the exact SW 2025 COM
+signature/selection marks in the installed `sldworks.tlb` and local API help;
+write a mock-COM unit test for validation, unit conversion, selection and
+failure paths; create a *scratch* part, exercise the public MCP operation,
+rebuild and measure the changed body/feature parameter. Merely receiving a
+non-null COM return or a feature name is insufficient. Save/close only scratch
+documents under the approved output root; leave users' open documents and
+global profile/file-location preferences untouched. Where an operation does
+not change volume (e.g. cosmetic beads, unfold, bend parameters), compare its
+own persistent parameter or physical geometry (bounding box, area, bends,
+edge topology, flat pattern) before/after. Record the live evidence and any
+failed approach in the register/findings *after* the test, not in advance.
+Weldment tests must use installed `.sldlfp` profiles (e.g. DIN IPE or ISO
+square tube), not rectangular proxy solids.
+
+### W1–W10: weldments and adjacent part features
+
+`✅` means the **listed base mode** already has live evidence; it does not
+cover additional modes on the same row. `⬜` means research/implementation
+pending. API names below are leads for V4.1, not validated pywin32 recipes.
+
+| ID | Operation / current coverage | Research lead and separate live proof to request |
+|---|---|---|
+| W1 | Structural Member ✅ (`create_structural_member`; library profiles, connected frame and separate picket groups) | Tested one connected four-line frame sketch with Custom 50×20 and one three-line picket sketch with Custom 8-mm rod: two features, seven solid bodies. Explicit `corner_type="miter"` on the frame reads back `ApplyCornerTreatment=True` and `CornerTreatmentType=1`; `separate_groups=True` creates one group per disconnected picket. Group connected runs together; split unusually placed segments when necessary. The original single-group default remains intact. Rotation and locate-profile still need separate proof; see `W1.fence`. |
+| W2 | Trim/Extend ✅ **miter, zero gap only** (`trim_weldment_members`); **trim/extend to face blocked** | `IFeatureManager.InsertWeldmentTrimFeature2`; local help documents body selection mark 1 and boundary mark 2. Two separate ISO-profile members gave persistent `WeldCornerFeat` and a solid-volume delta above 10 mm³ (`W2.miter`). On a scratch fence, `swEndConditionTrim=4` against the real underside of the top rail returned a proxy but no persistent feature: the short rod stayed at Z=230 mm instead of reaching the Z=275 mm face. This mode is **not exposed**; record a UI macro for selection/corner details before retrying (`W2.face`). Butt, nonzero gap and cut-list effects remain unverified. Do not confuse with blocked **surface** Trim in M3. |
+| W3 | End Cap ✅ (`create_weldment_end_cap`) | `InsertEndCapFeature3` (selection based, 10 args) is the only variant that sets the thickness direction; `InsertEndCapFeature2` (faces array) always caps outward. On a hollow ISO square-tube member the tool caps both auto-detected end faces or named `list_planar_faces` indices, and `direction` picks the side of the end face: `outward` protrudes, `inward` (default) is flush and shortens the member, `inset` recesses by `inset_mm`. Caps become their own bodies, so the live proof sums the whole document volume (added 1683–3020 mm³ for a 5 mm cap); a persistent `EndCap` feature is required. See `W3.endcap`. |
+| W4 | Gusset ✅ (`create_weldment_gusset`) | `InsertGussetFeature3` (selection based, 20 args) uses the two supporting faces from the current selection at mark 1; `InsertGussetFeature2` (faces array) created no feature in any of eight probed combinations. The fixture must be a **T-joint**: the through member continues past the joint so the through member's face and the butting member's near face share a real edge; a corner where both members stop at the same point has no shared edge and no gusset. Triangle/polygon profile, thickness side (inner/both/outer), profile location, legs, angles, offset and the weld-bead chamfer are all exposed. The gusset is its own body, so the live proof sums the whole document volume (1562.5 mm³ for 25×25×5). Confirmed against the user's manually built Part200. See `W4.gusset`. |
+| W5 | Weld Bead ✅ **cosmetic, weld-path only** (`create_cosmetic_weld_bead`); modelled fillet bead blocked | `InsertCosmeticWeldBead2` in weld-path mode (mode 1) takes a path of edges from `list_body_edges` and creates a persistent `CosmeticWeldBead` in the Weld Folder; it adds no material, so the proof is the feature plus the recorded weld-folder total length (and an asserted zero volume change), never a volume delta. Weld-geometry mode (two face sets, marks 4/8) welded only one intersection edge per call, and the modelled fillet bead was not created in seven probed combinations, so it stays blocked until a UI macro is recorded. See `W5.bead`. |
+| W6 | Extruded Boss ✅ (`extrude_sketch`) | Existing blind mode is not every end condition: investigate mid-plane, two directions and up-to-reference separately; verify target thickness/volume and direction. |
+| W7 | Extruded Cut ✅ (`cut_extrude`) | Investigate blind/through-all/normal cut and direction individually; measure removed volume and resulting openings rather than just COM status. |
+| W8 | Hole Wizard ✅ (straight blind ANSI metric only) | `hole_wizard`: counterbore, countersink, straight/pipe tap, slots, Through All and multiple positions are **not** implied by existing evidence. For each accepted mode verify hole topology, standard/size and depth/read-back; do not simulate a threaded hole with a plain cylinder. |
+| W9 | Chamfer ✅ (one angle–distance edge) | `chamfer_edges`: distance–distance, vertex and multiple edges each need a distinct geometry/angle test; measure removed material. |
+| W10 | Reference Geometry ✅ (axis and plane, basic modes) | `create_reference_axis` and `create_reference_plane` exist. Investigate alternative reference combinations individually; verify transform/direction and use the reference in a dependent feature. |
+
+**Execution order:** W3/W4 done → W5 once the bead representation is decided;
+remaining W2 modes (butt, nonzero gap, cut list) when a UI macro is
+recorded. W6–W10 are *mode-completion* work, not requests to
+re-implement their proven base tools. Log blocked COM modes honestly and stop
+after repeated identical failures rather than cycling signatures blindly.
+
+### S1–S26: sheet-metal candidate operations
+
+This numbered worklist covers 26 **toolbar operations** from the official
+SOLIDWORKS 2025 Sheet Metal Toolbar list (27 entries). **Stamp**, new in 2025,
+is an explicit additional research item below, not quietly counted as
+implemented or dropped. `Base-Flange/Tab` is one toolbar entry; the existing
+`export_flat_pattern` is a separate MCP workflow, not a toolbar entry.
+`Break-Corner/Corner-Trim` is one toolbar entry, distinct from `Corner Trim`
+on a flattened part. These are scope conventions for this plan, not a claim
+that the user's original count necessarily excluded Stamp. The exact callable
+API and viable input topology for ⬜ rows remain research questions.
+Prerequisite for all bending
+tests: known thickness, bend radius and K-factor/bend allowance, with the
+folded *and* flat-pattern extents recorded. Gauge-table support is an
+additional parameter-mode investigation, not a proven option of the current
+base-flange tool.
+
+| ID | Operation / current state | Candidate route and measurable live acceptance |
+|---|---|---|
+| S1 | Base-Flange/Tab ✅ **base flange only** (`create_sheet_metal_base_flange`) | `InsertSheetMetalBaseFlange` path has live evidence; sketch-on-face tab and bend-allowance modes still need separate area/thickness and developed-outline proofs. Do not confuse Tab with S22. |
+| S2 | Edge Flange ✅ (`create_edge_flange`) | 20 mm flange on the 100 mm edge of a 100×50×1 mm base-flange plate added **2135.6 mm³** and took the sheet from 6 to 14 faces with the body count unchanged at 1; 45° gave 2076.4 mm³ and `bend_radius_mm=5` (which clears `swInsertEdgeFlangeUseDefaultRadius` so the argument is read) gave 2363.9 mm³. Route: `IModelDoc2.InsertSketchForEdgeFlange` → `EditSketch` + `SketchUseEdge` + three lines closing the bend line into the same four-line rectangle SolidWorks itself stores (read from the absorbed profile sketch of a hand-made flange) → `IFeatureManager.InsertSheetMetalEdgeFlange2`. **Only `swFlangePositionTypeBendOutside` (3) builds through the API**: material-inside/outside, bend-centerline, bend-sharp and bend-tangent all returned no feature. `CreateDefinition(swFmEdgeFlange=37)` + `IEdgeFlangeFeatureData.AddEdges` returned `swEdgeFlangeError_EdgeNotSpecified` (1) with `GetEdgeCount` 0 for every marshalling and edge source tried. One edge per call: two and three edges at once, and `swInsertEdgeFlangeFlipDir`, are **not exposed**. See `S2.eflange`. |
+| S3 | Miter Flange ✅ **single-edge, four-line profile** (`create_miter_flange`) | `IFeatureManager.InsertSheetMetalMiterFlange` works when **both** the straight sheet edge and a closed, real four-segment profile sketch are selected (edge `Select4(False)`, sketch `Select2(True, 0)`); selecting only one returns NULL. On a 100×50×1 mm plate, a Right-Plane open path from the back top edge gives four `SketchBend` sub-features, 5000→6990.607 mm³, 6→38 faces, one body. An earlier false-negative was caused by a coordinate-transform spike that silently supplied `(0,0)` for every line: `CreateLine2` returned NULL four times and the empty sketch disappeared. Only this profile/default gap-radius-position combination is exposed; joined edges, alternate profiles and flat outline still need separate live proofs. |
+| S4 | Swept Flange ⬜ | `ISweptFlangeFeatureData` exists locally, but creation entry point unverified; find via TLB/macro, then verify swept wall and flat pattern. |
+| S5 | Hem ⬜ | Local help: `IFeatureManager.InsertSheetMetalHem2`; test open/closed hem separately; measure folded rim and developed length. |
+| S6 | Jog ⬜ | Local help: `IModelDoc2.InsertSheetMetalJog`; verify offset and two bends at unchanged sheet thickness. |
+| S7 | Sketched Bend ⬜ | `IFeatureManager.InsertSheetMetal3dBend` exists; its mapping to the toolbar command/selection is **unconfirmed**. Verify bend angle and displaced face orientation. |
+| S8 | Lofted-Bend ⬜ | Local help: `IFeatureManager.InsertSheetMetalLoftedBend2`; start from two open profiles (not an existing base flange) and verify section geometry and flat pattern. |
+| S9 | Convert to Sheet Metal ⬜ | Local help: `IFeatureManager.InsertConvertToSheetMetal2`; verify conversion of a valid solid/surface and read back acquired sheet-metal parameters plus flat pattern. |
+| S10 | Insert Bends ⬜ | No verified creation entry point; record a macro for a suitable constant-thickness part; measure bends and developed shape. |
+| S11 | Rip ⬜ | Local help: `IModelDoc2.InsertRip`; verify selected edges, gap width and newly open edges. |
+| S12 | Bend Notch ⬜ | 2025 toolbar operation; no dedicated method verified in local API extract. Macro-record first; measure notch depth/width on the flat pattern. |
+| S13 | Closed Corner ⬜ | Local help: `IModelDoc2.InsertSheetMetalClosedCorner`; measure changed gap/overlap at adjacent flanges. |
+| S14 | Break-Corner/Corner-Trim ⬜ | Local help: `IModelDoc2.InsertSheetMetalBreakCorner`; check whether both UI modes map to this API and test each accepted mode's edge/corner geometry. |
+| S15 | Corner Trim (flattened) ⬜ | Local help: `IFeatureManager.InsertSheetMetalCornerTrim`; on a flat sheet verify relief/corner outline and removed material. Distinct from S14. |
+| S16 | Corner Relief ⬜ | Separate creation API not verified; documented example uses Edge Flange. Investigate independent route/macros, then compare relief area/shape in developed part. S2 may be prerequisite. |
+| S17 | Sheet Metal Gusset ⬜ | Local help: `IFeatureManager.InsertSheetMetalGussetFeature3`; verify gusset thickness and geometry; distinct from W4 weldment gusset. |
+| S18 | Cross-Break ⬜ | Local help: `IFeatureManager.InsertCrossBreak`; read break angle/radius and observe crease geometry; do not require volume delta for a graphic break. |
+| S19 | Forming Tool ⬜ | `InsertFormToolFeature` appears in local help; signature/placement still unverified. Use a real library forming tool; measure impression and height. |
+| S20 | Normal Cut ⬜ | Local help: `AddSMNormalCut` / `AddSMNormalCutType` / `FinishSMNormalCut`; establish their sequence, then measure thickness-normal walls and flat opening. |
+| S21 | Welded Corner ⬜ | 2025 toolbar operation distinct from W5; no dedicated API confirmed. Macro-record first; inspect weld size/path and physical versus cosmetic representation separately. |
+| S22 | Tab and Slot ✅ (`create_tab_and_slot`), **flat sheets and profiles** | `IFeatureManager.CreateDefinition(swFmTabAndSlot = 88)` → `SelectionAddNewGroup()` → set `SelectionTabEdge`, `SelectionSlotFace`, `TabLength`, `SlotClearance`, `TabHeightType`+`TabHeightValue` (blind), `TabEdgesType`, spacing → `CreateFeature`. The group holds the raw edge and face objects, so no selection marks are used. On two 1 mm sheet-metal plates meeting at a corner a 10×1×6 mm tab grew and a 10.4×1.2×1 mm slot was cut (tab body +60 mm³/−12.48 mm³, +2/+4 faces). On **real weldment profiles** — a Custom 50×50 tube with 2 mm walls and a Custom 30X30 tube standing on it — the butting tube's base rim edge grew a 10×2×2 mm tab that ran from Z=25 down to Z=23, i.e. through the wall and flush with its inner face when `tab_height_mm` is the wall thickness, and cut 45.52 mm³ from the through tube; half the wall left a blind pocket and wall+3 mm reached into the hollow section. `spacing="equal"` with 3 instances gave three tabs and three slots (+180 / −37.44 mm³) and `edge_treatment="fillet"` also worked. The tab's reference face is derived automatically as the face sharing the tab edge that is coplanar with the slot face (on plates the thin rim face, on tubes the end face). `TabFace` on a perpendicular face, or omitted on a tube, never created a feature; `UpToSurface` and `OffsetFromSurface` heights produced no feature and are **not exposed**. `TabThickness` defaults to 1 mm, so pass the wall thickness for a snug fit. See `S22.tabs`. |
+| S23 | Unfold (selected bends) ⬜ | Local help: `IModelDoc2.InsertSheetMetalUnfold()` on selected bends; measure flattened selected bends without losing the folded definition. |
+| S24 | Fold (selected bends) ⬜ | Local help: `IModelDoc2.InsertSheetMetalFold()`; verify inverse geometry and restoration of pre-unfold extents. |
+| S25 | Flatten / refold ✅ (`flatten_sheet_metal`) | Existing Flat-Pattern suppression toggle; compare flat/folded face count and extents; multibody mode remains to test separately. |
+| S26 | No Bends ⬜ | 2025 toolbar operation; no verified API entry point. Determine whether feature suppression or a distinct feature is required; verify bendless physical geometry and preserved original bend definition. |
+
+**Outside this 26-row baseline:** `Stamp` appears as a **27th toolbar command
+in SOLIDWORKS 2025**, with no verified creation API in the installed CHM
+extract. Investigate by recording a macro before deciding whether to add it
+to implementation scope. `export_flat_pattern` is already live as a separate
+MCP workflow; keep its existing DXF geometry/scale regression, not a duplicate
+toolbar row. `get_sheet_metal_info` and `get_flat_pattern_info` are likewise
+existing read operations outside the toolbar inventory.
+
+**Priority and dependencies:** S1 → S2 ✅ → S22 ✅ (live 25 September 2026, see
+`S2.eflange` and `S22.tabs`). S2 unblocked the bend-dependent row: the flange
+itself is proven, and **the lesson is that a dead `CreateDefinition` route does
+not mean the feature is impossible** — `CreateDefinition(swFmEdgeFlange)` +
+`IEdgeFlangeFeatureData.AddEdges` returned `EdgeNotSpecified` for every marshalling,
+while the documented `InsertSheetMetalEdgeFlange2` method call built the flange
+once the caller drew the profile it asks for. Try the documented method call
+before recording a macro. S2's own scope: **one straight edge per call and
+bend-outside only**; multi-edge and `FlipDir` are unexposed, and other
+`swFlangePositionTypes_e` values returned no feature (docs/api-findings.md §65).
+Next along the bend chain: S3 Miter Flange, S5 Hem, S6 Jog, then the corner rows
+S13–S18 which all need a flange to exist first. S22 remaining work is other
+profile shapes (rounded rectangular, angle, channel) and a tab on a profile
+*side* wall rather than its end face. After that S4/S7–S12/S17–S21/S26, followed
+by S23–S25 regression. V4.1's read-only investigation found the local API entry
+points above; a separate offline TLB read confirmed the S22 enum value. Before
+COM mutation, check each required signature in the local `sldworksapi.chm` and
+`sldworks.tlb`. Next, run a guarded scratch-document spike; if repeated calls
+fail, stop and report. For S4/S7/S10/S12/S16/S19/S21/S26 (and Stamp), record a
+macro or find the feature-data creation path before guessing positional
+parameters. This research is **not** live evidence.
+
+**Performance rule (measured on S2, holds for every `part_edges` consumer):**
+one body per document. `list_body_edges` on the same fixture cost 0.14 s with one
+body, 5.77 s with two and 8.54 s with three — 12 extra edges cost 5.6 s, because
+each COM access to the bodies of a multibody document is expensive, not because
+of the edge count (`IBody2::GetEdges` is only ~1.8x faster). Building the three
+S2 variants in one document took 125 s; one document per test took 47.6 s. Bases
+are cheap (~2.8 s) and `create_new_part` is ~1.4 s, so save **edge scans**, not
+documents. Keep one document per live test method, and make a test that opens two
+documents verify the fresh one is empty, otherwise the earlier document stays
+active and the new geometry lands in it (seen as "1 != 2 bodies"). See
+docs/api-findings.md §65.6.
+
+Official 2025 research entry points:
+[Tab and Slot C# example](https://help.solidworks.com/2025/english/api/sldworksapi/Create_Tab_And_Slot_Example_CSharp.htm),
+[Tab and Slot feature data](https://help.solidworks.com/2025/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ITabAndSlotFeatureData.html),
+[Sheet Metal toolbar](https://help.solidworks.com/2025/english/solidworks/sldworks/r_Sheet_Metal_Toolbar.htm),
+[Trim/Extend API](https://help.solidworks.com/2025/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IFeatureManager~InsertWeldmentTrimFeature2.html),
+[Weldment feature example](https://help.solidworks.com/2025/English/api/sldworksapi/Insert_Weldment_Features_Example_CSharp.htm).
+
+---
+
 # 14. VERSION HISTORY
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.3 | Jan 2026 | Current - 11 tools |
+| 2.3 | Jan 2026 | Historical baseline - 11 tools (see §12 for current state) |
 | 3.0 | Target | 55+ tools, full CAD support |
 
 ---
 
 **END OF ROADMAP**
 
-*Last Updated: January 2026*
-*Author: Samsaam Ali Baig*
+*Last Updated: 24 September 2026 (progress sections §7–§12 grounded in `scripts/capability_requirements.json`)*
+*Original author: Samsaam Ali Baig. Additional development and progress updates: PksOck.*

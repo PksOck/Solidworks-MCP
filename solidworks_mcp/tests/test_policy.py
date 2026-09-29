@@ -3,6 +3,7 @@ import unittest
 import os
 from pathlib import Path
 
+from solidworks_mcp.config import SolidWorksConfig
 from solidworks_mcp.core.policy import OperationClass, PathPolicy, WriteDeniedError
 
 
@@ -55,6 +56,17 @@ class PathPolicyTests(unittest.TestCase):
             self.output_root / "frame.SLDPRT", OperationClass.STATEFUL_READ)
 
         self.assertEqual((self.output_root / "frame.SLDPRT").resolve(), allowed)
+
+    def test_config_allows_library_root_without_approving_repo(self):
+        library = self.root / "repo" / "solidworks_mcp" / "standard_library"
+        config = SolidWorksConfig(guarded_mode=True,
+                                  output_roots=[str(self.output_root), str(library)])
+        policy = config.create_path_policy()
+
+        self.assertEqual((library / "sized" / "M10.SLDPRT").resolve(),
+                         policy.require_write(library / "sized" / "M10.SLDPRT", OperationClass.MUTATE))
+        with self.assertRaises(WriteDeniedError):
+            policy.require_write(library.parent / "config.json", OperationClass.MUTATE)
 
 
 if __name__ == "__main__":

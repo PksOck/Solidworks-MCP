@@ -401,26 +401,33 @@ class DocumentOperations:
                     return r
             
             docs = []
+            unresolved = []
+            retained = []
             doc = com(self._sw_app, "GetFirstDocument")
 
             while doc:
+                retained.append(doc)
+                if len(retained)>10000:
+                    raise ValueError("Open document traversal limit exceeded.")
                 try:
                     title = com(doc, "GetTitle")
                     doc_type = com(doc, "GetType")
 
                     type_names = {1: "Part", 2: "Assembly", 3: "Drawing"}
 
-                    docs.append({
-                        "title": title,
-                        "type": type_names.get(doc_type, "Unknown")
-                    })
-                except:
-                    pass
+                    row={"title":title,"type":type_names.get(doc_type,"Unknown")}
+                    for key,member in (("path","GetPathName"),("unsaved_changes","GetSaveFlag")):
+                        try:row[key]=com(doc,member)
+                        except Exception as exc:
+                            row[key]=None;unresolved.append(f"{title}: {member}: {exc}")
+                    docs.append(row)
+                except Exception as exc:
+                    unresolved.append(str(exc))
 
                 doc = com(doc, "GetNext")
             
             return self._result(True, f"{len(docs)} document(s) open",
-                              SwErrors.swSuccess, {"documents": docs})
+                              SwErrors.swSuccess, {"documents": docs, "complete": not unresolved, "unresolved": unresolved})
             
         except Exception as e:
             logger.error(f"List documents error: {e}\n{traceback.format_exc()}")

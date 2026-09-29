@@ -85,6 +85,35 @@ def _create_entity(sw, method, coordinates, unit, message, data, leading=(), tra
 
 
 @tool(
+    name="draw_line_3d",
+    description="Draw a straight line with explicit XYZ endpoints in the active 3D sketch. Coordinates are in the part model frame.",
+    schema={"type": "object", "properties": {
+        **{key: {"type": "number"} for key in ("x1", "y1", "z1", "x2", "y2", "z2")},
+        "unit": UNIT_SCHEMA,
+    }, "required": ["x1", "y1", "z1", "x2", "y2", "z2"]},
+    operation_class=OperationClass.MUTATE,
+)
+def draw_line_3d(sw, x1, y1, z1, x2, y2, z2, unit="mm"):
+    values = (x1, y1, z1, x2, y2, z2)
+    meters, error = _convert_coordinates(sw, unit, values)
+    if error:
+        return error
+    if math.dist(meters[:3], meters[3:]) < 1e-10:
+        return _invalid(sw, "The two 3D line endpoints must differ.")
+    document, error = sw.get_active_doc()
+    if error:
+        return error
+    try:
+        sketch = com(document, "GetActiveSketch2")
+        if sketch is None or not bool(com(sketch, "Is3D")):
+            return _invalid(sw, "Start a 3D sketch before drawing a 3D line.", "NOT_A_3D_SKETCH")
+    except Exception as exc:
+        return _invalid(sw, f"Could not verify the active 3D sketch: {exc}")
+    return _create_entity(sw, "CreateLine", values, unit, "Created 3D line.",
+                          {"start": list(values[:3]), "end": list(values[3:])})
+
+
+@tool(
     name="draw_centerline",
     description=(
         "Draw a centerline in the active sketch. Centerlines are construction "

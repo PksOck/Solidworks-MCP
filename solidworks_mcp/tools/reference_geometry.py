@@ -14,6 +14,37 @@ from ..registry import tool
 SW_REF_PLANE_DISTANCE = 8
 SW_REF_PLANE_DISTANCE_REVERSED = 264
 
+@tool(name='create_sketch_on_planar_face',
+      description='Create a sketch on the exact native planar face index from list_planar_faces. Avoids ambiguous coordinate selection.',
+      schema={'type':'object','properties':{'face_index':{'type':'integer','minimum':0},'exact_geometry':{'type':'boolean','default':False}},'required':['face_index']},
+      operation_class=OperationClass.MUTATE)
+def create_sketch_on_planar_face(sw,face_index,exact_geometry=False):
+    if isinstance(face_index,bool) or not isinstance(face_index,int) or face_index<0 or not isinstance(exact_geometry,bool):
+        return sw._result(False,'Invalid face index or exact_geometry flag.',SwErrors.swInvalidInput)
+    doc,error=sw.get_active_doc()
+    if error:return error
+    from .export import _get_planar_face_by_index
+    try:
+        if int(com(doc,'GetType'))!=1 or com(doc,'GetActiveSketch2') is not None:
+            return sw._result(False,'Requires a part with no active sketch.',SwErrors.swInvalidInput)
+        face=_get_planar_face_by_index(doc,face_index)
+        if face is None:return sw._result(False,'Face index is missing or non-planar.',SwErrors.swInvalidInput)
+        com(doc,'ClearSelection2',True)
+        if not com(face,'Select4',False,win32com.client.VARIANT(pythoncom.VT_DISPATCH,None)):
+            return sw._result(False,'Native face selection failed.',SwErrors.swSelectionError)
+        com(doc,'InsertSketch2',True)
+        sketch=com(doc,'GetActiveSketch2')
+        if sketch is None:return sw._result(False,'No sketch was created.',SwErrors.swSketchError)
+        tf=list(com(com(sketch,'ModelToSketchTransform'),'ArrayData'))
+        point=list(com(com(face,'GetSurface'),'PlaneParams')[3:6])
+        residual=sum(point[j]*tf[j*3+2] for j in range(3))+tf[11]
+        if abs(residual)>1e-7:
+            return sw._result(False,'Sketch does not lie on the selected face plane.',SwErrors.swSketchError)
+        set_com(com(doc,'SketchManager'),'AddToDB',exact_geometry)
+        return sw._result(True,'Sketch created on the exact native planar face.',data={'face_index':face_index,'model_to_sketch_transform':tf,'plane_residual_m':residual,'exact_geometry':exact_geometry})
+    except Exception as exc:
+        return sw._result(False,f'Indexed face sketch failed: {exc}',SwErrors.swSketchError)
+
 #: Degrees -> radians, for the coordinate-system rotation parameters.
 _DEGREES_TO_RADIANS = math.pi / 180.0
 

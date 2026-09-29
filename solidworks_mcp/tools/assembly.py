@@ -3,12 +3,13 @@ Assembly tools (part E): insert components, mate them, and pack and go.
 """
 
 import logging
+import math
 import os
 
 import pythoncom
 import win32com.client
 
-from ..comutil import com
+from ..comutil import com, set_com
 from ..constants import SwDocumentTypes, SwErrors, SwMateTypes
 from ..core.policy import OperationClass
 from ..registry import tool
@@ -195,9 +196,12 @@ def _open_part_box(sw, filepath):
 
 
 def _open_part_for_insert(sw, filepath):
-    """Open a part document (silent, read-only) so a later AddComponent5 can
-    reference it. Toolbox browser parts are rejected by AddComponent5 when
-    their document is closed; opening first is the verified workaround."""
+    """Preload a native part or assembly, silent and read-only, for insertion."""
+    document_type = {".sldprt": SwDocumentTypes.swDocPART,
+                     ".sldasm": SwDocumentTypes.swDocASSEMBLY}.get(
+                         os.path.splitext(filepath)[1].lower())
+    if document_type is None:
+        return None
     app = getattr(sw, "app", None)
     if app is None:
         return None
@@ -210,7 +214,7 @@ def _open_part_for_insert(sw, filepath):
     warnings = wc.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
     try:
         # swOpenDocOptions_Silent | swOpenDocOptions_ReadOnly
-        return com(app, "OpenDoc6", filepath, 1, 1 | 2, "", errors, warnings)
+        return com(app, "OpenDoc6", filepath, int(document_type), 1 | 2, "", errors, warnings)
     except Exception as e:
         logger.warning("could not open %s for insert: %s", filepath, e)
         return None
@@ -325,6 +329,91 @@ def insert_component(sw, filepath: str, x: float = 0.0, y: float = 0.0, z: float
         data={"name": com(comp, "Name2"), "path": filepath,
               "configuration": configuration or None}
     )
+
+
+@tool(name="set_component_translation", description=(
+    "Set one floating top-level component's absolute translation in millimetres, "
+    "preserving rotation and scale. Requires expected current translation; reads "
+    "native transform back. Does not save or repair mates."),
+    schema={"type": "object", "properties": {
+        "component_name": {"type": "string"},
+        "translation_mm": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "expected_translation_mm": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+        "required": ["component_name", "translation_mm", "expected_translation_mm"]},
+    operation_class=OperationClass.MUTATE)
+def set_component_translation(sw, component_name, translation_mm, expected_translation_mm):
+    asm, error = _require_assembly(sw)
+    if error:
+        return error
+    changed = False
+    try:
+        for values in (translation_mm, expected_translation_mm):
+            if (not isinstance(values, (list, tuple)) or len(values) != 3 or
+                    any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values)):
+                raise ValueError("Translations must contain three finite numeric millimetre values.")
+        if not isinstance(component_name, str) or not component_name or '/' in component_name:
+            raise ValueError("Exact top-level component Name2 required.")
+        component = _find_component(asm, component_name)
+        if component is None:
+            raise ValueError("Component not found.")
+        if com(component, "Name2") != component_name:
+            raise ValueError("Exact top-level component required; nested suffix matching is not allowed.")
+        if com(component, "IsFixed"):
+            raise ValueError("Fixed component must not be moved by this tool.")
+        before = list(com(com(component, "Transform2"), "ArrayData"))
+        if len(before) != 16 or not all(math.isfinite(v) for v in before) or before[12] <= 0:
+            raise ValueError("Invalid native component transform.")
+        if any(abs(before[9+i] * 1000 - expected_translation_mm[i]) > .001 for i in range(3)):
+            raise ValueError("Component translation changed; refresh expected position.")
+        desired = list(before)
+        desired[9:12] = [v / 1000 for v in translation_mm]
+        variant = win32com.client.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, desired)
+        transform = com(com(sw.app, "GetMathUtility"), "CreateTransform", variant)
+        set_com(transform, "ArrayData", variant)
+        prepared = list(com(transform, "ArrayData"))
+        if len(prepared) != 16 or any(abs(a-b) > 1e-10 for a,b in zip(prepared, desired)):
+            raise ValueError("Math transform did not retain requested placement.")
+        changed = True
+        set_com(component, "Transform2", transform)
+        actual = list(com(com(component, "Transform2"), "ArrayData"))
+        if len(actual) != 16 or any(abs(a-b) > 1e-8 for a,b in zip(actual, desired)):
+            raise ValueError("Native component placement readback differs; inspect constraints.")
+        return sw._result(True, "Component translation verified; no save performed.", data={
+            "component_name": component_name, "before_transform": before, "transform": actual,
+            "translation_mm": [v * 1000 for v in actual[9:12]], "saved": False})
+    except Exception as exc:
+        return sw._result(False, str(exc), SwErrors.swInvalidInput,
+                          data={"document_may_be_modified": changed, "saved": False})
+
+
+@tool(name="set_component_fixed", description="Fix or float an exact top-level component and verify native state. No save performed.",
+      schema={"type":"object","properties":{"component_name":{"type":"string","minLength":1},"fixed":{"type":"boolean"}},
+              "required":["component_name","fixed"]}, operation_class=OperationClass.MUTATE)
+def set_component_fixed(sw, component_name, fixed):
+    asm,error=_require_assembly(sw)
+    if error:return error
+    changed=False
+    try:
+        if type(fixed) is not bool or not isinstance(component_name,str) or not component_name or '/' in component_name:
+            raise ValueError("Exact top-level component Name2 and boolean fixed state required.")
+        component=_find_component(asm,component_name)
+        if component is None or com(component,"Name2")!=component_name:
+            raise ValueError("Exact top-level component not found.")
+        before=bool(com(component,"IsFixed"))
+        if before!=fixed:
+            com(asm,"ClearSelection2",True)
+            data=com(com(asm,"SelectionManager"),"CreateSelectData")
+            if not com(component,"Select4",False,data,False):raise ValueError("Component selection failed.")
+            changed=True
+            com(asm,"FixComponent" if fixed else "UnfixComponent")
+        actual=bool(com(component,"IsFixed"))
+        if actual!=fixed:raise ValueError("Native fixed state did not change; inspect constraints.")
+        return sw._result(True,"Component fixed state verified; no save performed.",data={
+            "component_name":component_name,"before_fixed":before,"fixed":actual,"saved":False})
+    except Exception as exc:
+        return sw._result(False,str(exc),SwErrors.swInvalidInput,data={"document_may_be_modified":changed,"saved":False})
+    finally:
+        com(asm,"ClearSelection2",True)
 
 
 @tool(
@@ -499,18 +588,44 @@ def list_component_faces(sw, component_name: str) -> dict:
                           SwErrors.swInvalidInput)
 
     faces = []
+    unresolved = []
     for index, (face, kind) in enumerate(_component_faces(comp)):
         surface = com(face, "GetSurface")
         entry = {"index": index, "kind": kind}
         if kind == "planar":
             entry["area_mm2"] = round(com(face, "GetArea") * 1_000_000, 2)
+            try:
+                tf = list(com(com(comp, "Transform2"), "ArrayData"))
+                plane = list(com(surface, "PlaneParams"))
+                normal = list(com(face, "Normal"))
+                if len(tf) != 16 or len(plane) != 6 or len(normal) != 3:
+                    raise ValueError("Unexpected planar face or transform array length.")
+                if not all(math.isfinite(v) for v in tf + plane + normal) or tf[12] <= 0:
+                    raise ValueError("Non-finite geometry or unsupported component scale.")
+                point = _local_to_global(plane[3:6], tf)
+                center = _local_to_global(_face_local_point(face, kind), tf)
+                rotation = list(tf)
+                rotation[9:13] = [0, 0, 0, 1]
+                direction = _local_to_global(normal, rotation)
+                length = math.sqrt(sum(v*v for v in direction))
+                if length <= 1e-12:
+                    raise ValueError("Planar face has no usable oriented normal.")
+                entry.update(
+                    plane_point_assembly_mm=[v*1000 for v in point],
+                    box_center_assembly_mm=[v*1000 for v in center],
+                    normal_assembly=[v/length for v in direction],
+                    geometry_note="Oriented face normal; box centre is not an area centroid or guaranteed interior point.",
+                )
+            except Exception as exc:
+                unresolved.append(f"face[{index}]: assembly geometry unavailable: {exc}")
         else:
             radius = com(surface, "CylinderParams")[6]
             entry["radius_mm"] = round(radius * 1000, 3)
         faces.append(entry)
 
     return sw._result(True, f"Found {len(faces)} faces on {component_name}.",
-                      data={"faces": faces})
+                      data={"faces": faces, "complete": not unresolved,
+                            "unresolved": unresolved, "coordinate_frame": "active assembly"})
 
 
 def _add_mate(sw, asm, component1, face_index1, component2, face_index2,

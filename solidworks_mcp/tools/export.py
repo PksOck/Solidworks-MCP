@@ -237,7 +237,10 @@ def _longest_edge_direction(face):
                     best_length = length
                     best_dir = (dx / length, dy / length, dz / length)
         nxt = com(coedge, "GetNext")
-        coedge = None if (nxt is None or nxt is first_coedge) else nxt
+        same_first = nxt is first_coedge
+        if nxt is not None and hasattr(nxt,'_oleobj_') and hasattr(first_coedge,'_oleobj_'):
+            same_first = nxt._oleobj_ == first_coedge._oleobj_
+        coedge = None if (nxt is None or same_first) else nxt
         i += 1
 
     return best_dir
@@ -374,8 +377,13 @@ def export_face_to_dxf(sw, face_index: int, output_path: str) -> dict:
     if not ok:
         return sw._result(False, "Export failed.", SwErrors.swExportError)
 
+    exported = Path(output_path)
+    if not exported.is_file() or exported.stat().st_size==0:
+        return sw._result(False,'Export returned success without a non-empty output file.',SwErrors.swExportError)
+
     return sw._result(
         True,
         f"Exported face {face_index} to {output_path}.",
-        data={"path": output_path}
+        data={"path": output_path,'size_bytes':exported.stat().st_size,
+              'sha256':hashlib.sha256(exported.read_bytes()).hexdigest()}
     )

@@ -80,6 +80,13 @@ def operation_class_for(name: str) -> OperationClass | None:
     return entry["operation_class"] if entry is not None else None
 
 
+def tool_module_for(name: str) -> str | None:
+    """Source domain for generated catalogs, independent of tool counts."""
+    _load()
+    entry = _TOOLS.get(name)
+    return entry["handler"].__module__ if entry is not None else None
+
+
 def dispatch(name: str, sw, arguments: Dict, *, preflight: bool = True) -> Optional[Dict]:
     """
     Run a registered tool.

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from solidworks_mcp.core.policy import OperationClass
+from solidworks_mcp.core.policy import OperationClass, PathPolicy
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools import standard_parts as sp
 
@@ -146,7 +146,30 @@ class GetSizesTests(LibraryCase):
 
 
 class InsertStandardPartTests(LibraryCase):
-    def test_inserts_default_configuration_without_size(self):
+    def test_preparation_reuses_existing_copy_without_touching_master(self):
+        row = INDEX_ROWS[1]
+        target = sp._sized_cache_path(self.root, row, SIZES[row["rel"]][0])
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"existing")
+        sw = Automation()
+        sw._path_policy = PathPolicy([self.root])
+
+        result = sp._prepare_sized_copy(sw, self.root, row, SIZES[row["rel"]][0])
+
+        self.assertEqual(str(target), result)
+        self.assertEqual(b"existing", target.read_bytes())
+
+    def test_preparation_denied_outside_approved_library(self):
+        row = INDEX_ROWS[1]
+        sw = Automation()
+        sw._path_policy = PathPolicy([self.root / "other-output"])
+
+        result = sp._prepare_sized_copy(sw, self.root, row, SIZES[row["rel"]][0])
+
+        self.assertIsNone(result)
+        self.assertFalse((self.root / "sized").exists())
+
+    def test_fastener_without_size_never_inserts_preview_geometry(self):
         # a real source copy lets the resolver pick the portable part
         source_dir = self.root / "source" / "ISO" / "bolts and screws" \
             / "hex bolts and screws"
@@ -166,9 +189,9 @@ class InsertStandardPartTests(LibraryCase):
         finally:
             sp.insert_component = _original_insert_component
 
-        self.assertTrue(result["success"], result["message"])
-        self.assertEqual("", calls[0]["configuration"])
-        self.assertIn("standard", result["data"])
+        self.assertFalse(result["success"])
+        self.assertEqual("SIZE_REQUIRED", result["data"]["code"])
+        self.assertEqual([], calls)
 
     def test_insert_with_size_prepares_copy_then_inserts_default(self):
         source_dir = self.root / "source" / "ISO" / "bolts and screws" \

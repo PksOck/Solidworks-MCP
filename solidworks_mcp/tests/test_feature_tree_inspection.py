@@ -45,7 +45,42 @@ class Document:
         self.GetEquationMgr = EquationManager()
 
 
+class LinkedDisplayDimension:
+    def __init__(self, index):
+        self.index = index
+
+    @property
+    def GetDimension2(self):
+        dimension = type("LinkedDimension", (), {})()
+        dimension.FullName = f"D{self.index + 1}@Sketch1"
+        dimension.SystemValue = (self.index + 1) / 1000
+        return dimension
+
+
+class LinkedFeature(Feature):
+    def __init__(self):
+        super().__init__("Sketch1", "ProfileFeature")
+
+    @property
+    def GetFirstDisplayDimension(self):
+        return LinkedDisplayDimension(0)
+
+    @GetFirstDisplayDimension.setter
+    def GetFirstDisplayDimension(self, value):
+        pass
+
+    def GetNextDisplayDimension(self, current):
+        if current.index == 7:
+            return None
+        return LinkedDisplayDimension(current.index + 1)
+
+
 class FeatureTreeInspectionTests(unittest.TestCase):
+    def test_walks_all_dimensions_when_next_returns_transient_wrappers(self):
+        result = inspect_feature_tree(Document(LinkedFeature()))
+        names = [row["name"] for row in result["features"][0]["parameters"]]
+        self.assertEqual([f"D{i}@Sketch1" for i in range(1, 9)], names)
+
     def test_preserves_unknown_subfeature_dimensions_and_equations(self):
         child = Feature("Imported oddity", "UnknownFeature")
         parent = Feature(

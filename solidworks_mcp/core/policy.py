@@ -12,6 +12,7 @@ from .contracts import OperationError
 
 class OperationClass(str, Enum):
     READ = "read"
+    PROJECT_WRITE = "project_write"
     STATEFUL_READ = "stateful_read"
     MUTATE = "mutate"
     EXPORT = "export"

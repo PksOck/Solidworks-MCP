@@ -23,7 +23,7 @@
 
 ## ✨ Features
 
-- ✅ **22 Tools** covering parts, sketches, features, and utilities
+- ✅ **Extensible tool catalog** covering parts, sketches, features, and utilities; use `get_capabilities` for the current list
 - ✅ **SolidWorks 2023–2025 Compatible** with version-aware API fallbacks
 - ✅ **Auto-detects SolidWorks** installation via Windows registry
 - ✅ **Multi-unit support** — mm, cm, inch, meter, foot
@@ -35,6 +35,21 @@
 ---
 
 ## 🛠️ Available Tools
+
+The table below lists core examples, not the complete current catalog.
+Before modeling, use `get_modeling_guide(topic="index")` to select an ordered
+workflow or an expert topic. The same read-only knowledge is available at
+`solidworks://guides/index`. It covers feature order, prerequisite checks,
+verification and currently advertised workflow tools without connecting to CAD.
+See [shared knowledge and verification](solidworks_mcp/knowledge/documentation/integration.md).
+
+A local parameter workspace now shares project owners, drafts, calculations
+and agent requests between the browser and MCP clients. Start it with the
+project Python environment: `python scripts/parameter_workspace.py --open`.
+The tools `read_parameter_workspace` and `write_parameter_workspace` access
+the same persistent register without a CAD connection. This first stage
+does not discover or mutate CAD dimensions; see the
+[current workspace capabilities](solidworks_mcp/knowledge/solidworks-2025-expert/references/parameter-workspace-operations.md).
 
 | Category | Tool | Description |
 |----------|------|-------------|

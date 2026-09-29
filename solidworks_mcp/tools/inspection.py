@@ -1,5 +1,6 @@
 """Read-only structural inspection tools."""
 
+import math
 from pathlib import PureWindowsPath
 from uuid import uuid4
 
@@ -293,3 +294,131 @@ def list_planes(sw) -> dict:
                           SwErrors.swUnknownError)
 
     return sw._result(True, f"{len(planes)} planes found.", data={"planes": planes})
+
+
+_PART_EDGE_CACHE = None
+
+def part_edges(document):
+    """Unique edges with endpoint parameters, indexed for the current topology.
+
+    The index counts unique edges across all bodies in native body/edge order, so it is
+    the same index list_body_edges reports and create_cosmetic_weld_bead
+    consumes. Closed loops without distinct endpoints are omitted. Coincident
+    edges in different bodies retain separate identities.
+    Returns dicts with ``index``, ``body``, ``start_mm``, ``end_mm``,
+    ``length_mm`` (straight edges only) and ``is_line``; the raw IEdge is kept
+    under ``edge`` for internal callers.
+    """
+    global _PART_EDGE_CACHE
+    bodies = list(com(document, 'GetBodies2', 0, True) or [])
+    cache_key = None
+    try:
+        cache_key = (document._oleobj_, int(com(document,'GetUpdateStamp')),
+                     tuple((body._oleobj_,str(com(body,'Name'))) for body in bodies))
+    except AttributeError:
+        pass
+    if cache_key is not None and _PART_EDGE_CACHE is not None and _PART_EDGE_CACHE[0]==cache_key:
+        return _PART_EDGE_CACHE[1]
+    edges = []
+    seen = set()
+    for body_index, body in enumerate(bodies):
+        body_name = str(com(body, "Name"))
+        try:
+            native_edges = com(body, "GetEdges") or []
+        except AttributeError:
+            native_edges = [edge for face in com(body, "GetFaces") or []
+                            for edge in com(face, "GetEdges") or []]
+        for edge in native_edges:
+            curve = com(edge, "GetCurve")
+            is_line = bool(com(curve, "IsLine"))
+            try:
+                # One native parameter array replaces four vertex COM calls.
+                # GetCurve must precede GetCurveParams2 (SolidWorks API contract).
+                params = com(edge, "GetCurveParams2")
+                if params is None or len(params) < 6:
+                    raise ValueError("Missing edge endpoint parameters")
+                start = [round(float(v)*1000,4) for v in params[:3]]
+                end = [round(float(v)*1000,4) for v in params[3:6]]
+                if start == end and not is_line:
+                    continue
+            except (AttributeError, ValueError, TypeError):
+                start_vertex = com(edge, "GetStartVertex")
+                end_vertex = com(edge, "GetEndVertex")
+                if start_vertex is None or end_vertex is None:
+                    continue
+                start = [round(float(v)*1000,4) for v in com(start_vertex,"GetPoint")]
+                end = [round(float(v)*1000,4) for v in com(end_vertex,"GetPoint")]
+            key = (body_index, tuple(sorted((tuple(start), tuple(end)))))
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append({
+                "index": len(edges),
+                "body": body_name,
+                "body_index": body_index,
+                "start_mm": start,
+                "end_mm": end,
+                "length_mm": (round(math.dist(start, end), 4) if is_line
+                              else None),
+                "is_line": is_line,
+                "edge": edge,
+            })
+    if cache_key is not None:
+        _PART_EDGE_CACHE = (cache_key,edges)
+    return edges
+
+
+@tool(
+    name="list_body_edges",
+    description=(
+        "List the unique edges of every solid body in the active part, with "
+        "index, body, endpoints in millimetres, straight-edge length and curve "
+        "type. Use the index with create_cosmetic_weld_bead. Read-only."
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "min_length_mm": {
+                "type": "number", "minimum": 0.0, "default": 0.0,
+                "description": "Only report edges at least this long (straight edges)"
+            }
+        },
+        "required": []
+    },
+    operation_class=OperationClass.READ,
+)
+def list_body_edges(sw, min_length_mm: float = 0.0) -> dict:
+    """Return the indexed edges of the active part."""
+    if (isinstance(min_length_mm, bool)
+            or not isinstance(min_length_mm, (int, float)) or min_length_mm < 0):
+        return sw._result(False, "min_length_mm must be a non-negative number.",
+                          SwErrors.swInvalidInput)
+    doc, err = sw.get_active_doc()
+    if err:
+        return err
+    if com(doc, "GetType") != 1:
+        return sw._result(False, "Active document is not a part.",
+                          SwErrors.swInvalidFileType)
+
+    try:
+        edges = part_edges(doc)
+    except Exception as exc:
+        return sw._result(False, f"Could not read body edges: {exc}",
+                          SwErrors.swUnknownError)
+
+    reported = []
+    for edge in edges:
+        if edge["length_mm"] is None:
+            # Curves without a measured length are only listed when no minimum
+            # is requested, so a length filter stays meaningful.
+            if min_length_mm == 0:
+                reported.append({key: value for key, value in edge.items()
+                                 if key != "edge"})
+        elif edge["length_mm"] >= min_length_mm:
+            reported.append({key: value for key, value in edge.items()
+                             if key != "edge"})
+    return sw._result(
+        True,
+        f"Found {len(reported)} of {len(edges)} edges.",
+        data={"count": len(reported), "total_edges": len(edges),
+              "edges": reported})

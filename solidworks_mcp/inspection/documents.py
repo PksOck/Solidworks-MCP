@@ -91,6 +91,10 @@ def inspect_feature_tree(document, *, max_depth: int = 8) -> dict[str, Any]:
         display = optional(feature, "GetFirstDisplayDimension", path)
         seen = set()
         while display is not None and id(display) not in seen:
+            # Keep each COM proxy alive while walking the linked dimension
+            # list. Otherwise Python can reuse its id for a later proxy and
+            # falsely report a cycle after only a few dimensions.
+            retained_com_wrappers.append(display)
             seen.add(id(display))
             dimension = optional(display, "GetDimension2", path, 0)
             if dimension is not None:
@@ -155,7 +159,10 @@ def inspect_feature_tree(document, *, max_depth: int = 8) -> dict[str, Any]:
     equations = []
     manager = optional(document, "GetEquationMgr", "document")
     if manager is not None:
-        count = optional(manager, "Count", "equations")
+        try:
+            count = com(manager, "GetCount")
+        except Exception:
+            count = optional(manager, "Count", "equations")
         if isinstance(count, int):
             for index in range(count):
                 raw = optional(manager, "Equation", f"equation[{index}]", index)
