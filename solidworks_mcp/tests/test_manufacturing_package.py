@@ -56,6 +56,32 @@ class ManufacturingTests(unittest.TestCase):
             self.assertEqual('flat_dxf', artifact['kind']); self.assertEqual(3, artifact['size_bytes'])
             self.assertTrue(artifact['sha256'])
 
+    def test_final_progress_is_sent_only_after_final_verification(self):
+        from solidworks_mcp.core.progress import progress_scope
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'p.sldprt'; path.write_bytes(b'part'); sw = SW(root, path)
+            def copy(sw, source, destination, **kwargs):
+                folder = Path(destination); folder.mkdir()
+                copied = folder / 'copied.sldprt'; copied.write_bytes(b'part')
+                (folder / '.solidworks-project-copy.json').write_text(json.dumps({
+                    'schema_version': 1, 'status': 'verified', 'files': [{'copy': str(copied)}]}))
+                return {'success': True}
+            def flat(sw, output_path):
+                Path(output_path).write_bytes(b'DXF'); return {'success': True}
+            for exports_ok in (True, False):
+                sent = []
+                with patch('solidworks_mcp.tools.manufacturing_package.require_editable_copy', return_value=None),                      patch('solidworks_mcp.tools.manufacturing_package.copy_project', side_effect=copy),                      patch('solidworks_mcp.tools.manufacturing_package.get_cut_list', return_value={'success': True, 'data': {'items': []}}),                      patch('solidworks_mcp.tools.manufacturing_package.export_flat_pattern',
+                           side_effect=flat if exports_ok else (lambda sw, output_path: {'success': False})),                      patch('solidworks_mcp.core.progress.MIN_INTERVAL_S', 0),                      progress_scope(lambda *args: sent.append(args)):
+                    package = Path(root) / ('ok' if exports_ok else 'bad')
+                    build_manufacturing_package(sw, str(path), 'Default', str(package), ['flat_dxf'])
+                with self.subTest(exports_ok=exports_ok):
+                    self.assertTrue(sent)
+                    if exports_ok:
+                        self.assertEqual([3], [total for done, total, _ in sent if done >= total])
+                        self.assertEqual('verified', sent[-1][2])
+                    else:
+                        self.assertFalse([1 for done, total, _ in sent if done >= total])
+
     def test_flat_dxf_rejected_for_assembly_before_native_copy(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'p.sldasm'; path.write_bytes(b'assembly'); sw = SW(root, path); sw.doc.doc_type = 2

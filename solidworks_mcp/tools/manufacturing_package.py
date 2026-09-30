@@ -117,7 +117,7 @@ def build_manufacturing_package(sw, document_path, configuration, output_folder,
         if not native.get('success'): raise ValueError('Native copy failed: ' + native.get('message', 'unknown failure'))
         steps_total = 1 + (1 if doc_type in (1, 2) else 0) + len(formats)
         steps_done = 1
-        report_progress(steps_done, steps_total, 'native copy')
+        report_progress(min(steps_done, steps_total - 1), steps_total, 'native copy')
         native_manifest = folder / 'native' / MANIFEST
         if not native_manifest.is_file(): raise ValueError('Native copy did not produce its verification manifest.')
         native_data = json.loads(native_manifest.read_text(encoding='utf-8'))
@@ -140,7 +140,7 @@ def build_manufacturing_package(sw, document_path, configuration, output_folder,
             manifest['artifacts'].append(_artifact(cut_path, 'cut_list'))
             if 'stale' in cut.get('message', '').lower(): raise ValueError('Cut-list refresh failed; values may be stale.')
             steps_done += 1
-            report_progress(steps_done, steps_total, 'cut list')
+            report_progress(min(steps_done, steps_total - 1), steps_total, 'cut list')
         bom = None
         if doc_type == 2:
             _active(sw, path, configuration)
@@ -151,7 +151,7 @@ def build_manufacturing_package(sw, document_path, configuration, output_folder,
             artifact['inventory_complete'] = bom['complete']
             manifest['artifacts'].append(artifact)
             steps_done += 1
-            report_progress(steps_done, steps_total, 'component BOM')
+            report_progress(min(steps_done, steps_total - 1), steps_total, 'component BOM')
         for fmt in formats:
             _active(sw, path, configuration)
             target = folder / ('flat-pattern.dxf' if fmt == 'flat_dxf' else f'model.{fmt}')
@@ -163,9 +163,10 @@ def build_manufacturing_package(sw, document_path, configuration, output_folder,
                 raise ValueError(f'{fmt} export failed.')
             manifest['artifacts'].append(_artifact(target, fmt))
             steps_done += 1
-            report_progress(steps_done, steps_total, f'{fmt} export')
+            report_progress(min(steps_done, steps_total - 1), steps_total, f'{fmt} export')
         if bom is not None and not bom['complete']:
             raise ValueError('Assembly component inventory has virtual/unresolved occurrences; see component-bom.json.')
+        report_progress(steps_total, steps_total, 'verified')
         manifest['status'] = 'complete'
     except Exception as error:
         if not created: return _failure(sw, error)
