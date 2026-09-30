@@ -21,6 +21,7 @@ import base64
 import hashlib
 import logging
 import traceback
+from collections import OrderedDict
 from typing import Dict
 from pathlib import Path
 from uuid import uuid4
@@ -59,7 +60,14 @@ logger = logging.getLogger("SolidWorksMCP")
 sw_automation = SolidWorksAutomation()
 server = Server("solidworks-mcp-server", instructions=modeling_guidance.server_instructions())
 operation_journal = OperationJournal()
-_operation_payloads: Dict[str, Dict] = {}
+_MAX_REMEMBERED = 1000
+_operation_payloads: "OrderedDict[str, Dict]" = OrderedDict()
+
+
+def _remember_payload(operation_id: str, payload: Dict) -> None:
+    _operation_payloads[operation_id] = payload
+    while len(_operation_payloads) > _MAX_REMEMBERED:
+        _operation_payloads.popitem(last=False)
 
 
 # ============================================================================
@@ -185,7 +193,7 @@ def _record(operation_id: str, execution) -> Dict:
         )
     operation_journal.record(operation_result)
     payload = operation_result.to_dict(legacy=result)
-    _operation_payloads[operation_id] = payload
+    _remember_payload(operation_id, payload)
     return payload
 
 
@@ -199,7 +207,7 @@ def _record_exception(operation_id: str, error: Exception) -> Dict:
         "error_name": SwErrors.swUnknownError.name,
         "data": {},
     })
-    _operation_payloads[operation_id] = payload
+    _remember_payload(operation_id, payload)
     return payload
 
 

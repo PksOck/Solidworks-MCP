@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable
 from enum import Enum
 import json
@@ -23,9 +24,16 @@ class JournalState(str, Enum):
 class OperationJournal:
     """Record one result per client operation id, including unknown outcomes."""
 
-    def __init__(self) -> None:
-        self._results: dict[str, OperationResult] = {}
-        self._states: dict[str, JournalState] = {}
+    def __init__(self, max_entries: int = 1000) -> None:
+        self._max_entries = max_entries
+        self._results: OrderedDict[str, OperationResult] = OrderedDict()
+        self._states: OrderedDict[str, JournalState] = OrderedDict()
+
+    def _trim(self) -> None:
+        """Forget the oldest operations; a forgotten id runs again if reused."""
+        while len(self._states) > self._max_entries:
+            oldest, _ = self._states.popitem(last=False)
+            self._results.pop(oldest, None)
 
     def get(self, operation_id: str) -> OperationResult | None:
         return self._results.get(operation_id)
@@ -44,6 +52,7 @@ class OperationJournal:
                 operation_id, None, f"Operation is already {state.value}; its outcome is not yet known."
             )
         self._states[operation_id] = JournalState.PLANNED
+        self._trim()
         return None
 
     def mark_running(self, operation_id: str) -> None:
@@ -57,6 +66,7 @@ class OperationJournal:
             return existing
         self._results[result.operation_id] = result
         self._states[result.operation_id] = JournalState(result.status.value)
+        self._trim()
         return result
 
     def run(self, operation_id: str, callback: Callable[[], OperationResult]) -> OperationResult:
