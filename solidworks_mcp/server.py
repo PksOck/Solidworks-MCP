@@ -39,6 +39,7 @@ from .config import get_config
 from .core.contracts import OperationError, OperationResult, OperationStatus
 from .core.evidence import OperationJournal
 from . import catalog
+from .com_worker import run_com
 from .registry import execute
 from .knowledge import library as modeling_guidance
 
@@ -222,7 +223,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
     operation_journal.mark_running(operation_id)
     logger.info(f"Tool: {name}, Args: {arguments}")
     try:
-        payload = _record(operation_id, execute(name, sw_automation, arguments))
+        execution = await run_com(execute, name, sw_automation, arguments)
+        payload = _record(operation_id, execution)
     except Exception as error:
         logger.error(f"Tool error: {error}\n{traceback.format_exc()}")
         payload = _record_exception(operation_id, error)
