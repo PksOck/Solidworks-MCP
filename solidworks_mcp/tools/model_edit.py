@@ -13,9 +13,9 @@ from ..inspection.documents import inspect_feature_tree
 from ..registry import tool
 from .project_copy import _fail, require_editable_copy
 
-EDIT_ARGS = {'configuration': {'type': 'string', 'description': 'Expected ACTIVE configuration; never switched silently.'},
+EDIT_ARGS = {'configuration': {'type': 'string', 'description': 'Expected active configuration'},
              'edit_original': {'type': 'boolean', 'default': False,
-                 'description': 'Explicit original-edit intent. Does not bypass protected/output path policy.'}}
+                 'description': 'Edit the original; path policy still applies'}}
 UNITS = {'mm': .001, 'cm': .01, 'm': 1., 'in': .0254, 'ft': .3048,
          'deg': math.pi / 180, 'rad': 1., 'scalar': 1.}
 

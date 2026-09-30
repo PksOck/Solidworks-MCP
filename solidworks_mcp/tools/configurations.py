@@ -59,35 +59,25 @@ def _active_configuration_name(manager):
 @tool(
     name="create_configuration",
     description=(
-        "Add one named configuration to the active document, refusing to "
-        "overwrite an existing configuration, and read the stored "
-        "configuration back. Mutating."
+        "Add a named configuration to the active document (never overwrites) and read it back. Mutating."
     ),
     schema={"type": "object", "properties": {
         "name": {"type": "string", "minLength": 1,
-                 "description": "Name of the new configuration."},
+                 "description": "New configuration name"},
         "comment": {"type": "string", "default": "",
-                    "description": "Comment shown in Configuration Properties."},
+                    "description": "Configuration Properties comment"},
         "description": {"type": "string", "default": "",
-                        "description": "Text that identifies the configuration."},
+                        "description": "Configuration description"},
         "alternate_name": {"type": "string", "default": "",
-                           "description": "Alternate (user-specified) name; only "
-                                          "stored when options includes "
-                                          "swConfigOption_UseAlternateName (1)."},
+                           "description": "Stored only with option bit 1 (UseAlternateName)"},
         "parent_configuration": {"type": "string", "default": "",
-                                 "description": "Existing configuration to derive "
-                                                "from. Omit for a top-level "
-                                                "configuration."},
+                                 "description": "Derive from; omit for top level"},
         "options": {"type": "integer", "minimum": 0, "default": 0,
-                    "description": "Bitmask of swConfigurationOptions2_e. Add 128 "
-                                   "(swConfigOption_DontActivate) to leave the "
-                                   "active configuration unchanged."},
+                    "description": "swConfigurationOptions2_e bitmask; +128 keeps the active configuration"},
         "rebuild": {"type": "boolean", "default": False,
-                    "description": "Rebuild the model after adding the "
-                                   "configuration."},
+                    "description": "Rebuild after adding"},
         "activate": {"type": "boolean", "default": False,
-                     "description": "Activate the new configuration and verify "
-                                    "that it became active."},
+                     "description": "Activate and verify"},
     }, "required": ["name"]},
     operation_class=OperationClass.MUTATE,
 )

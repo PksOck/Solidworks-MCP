@@ -115,7 +115,7 @@ def _edit_suppression(sw, feature_name, expected_type, suppressed, expected_supp
         return _fail(sw, str(exc), 'CAD_EDIT_FAILED', document_may_be_modified=changed, saved=False)
 
 
-@tool(name='edit_feature_definition', description='Edit forward depth and blind/mid-plane end condition of a single-configuration Boss/Cut part copy, or suppress supported features in the exact current configuration. Verifies readback/rebuild; does not save.', schema=DEFINITION_SCHEMA, operation_class=OperationClass.MUTATE)
+@tool(name='edit_feature_definition', description="Edit depth and blind/mid-plane end condition of a Boss/Cut part copy, or suppress supported features. Verifies readback; does not save.", schema=DEFINITION_SCHEMA, operation_class=OperationClass.MUTATE)
 def edit_feature_definition(sw, feature_name, expected_type, suppressed=None, expected_suppressed=None, configuration=None, edit_original=False,
                             action='suppression', depth_mm=None, expected_depth_mm=None, end_condition=None, expected_end_condition=None):
     if action == 'extrusion':
@@ -125,7 +125,7 @@ def edit_feature_definition(sw, feature_name, expected_type, suppressed=None, ex
     return _edit_suppression(sw, feature_name, expected_type, suppressed, expected_suppressed, configuration, edit_original, FEATURE_TYPES)
 
 
-@tool(name='edit_mate', description='Edit an explicitly named existing distance/angle mate driver, or suppress a supported mate, in the exact active configuration of a verified assembly copy. Rejects driven/equation-controlled dimensions. Does not save.', schema=MATE_SCHEMA, operation_class=OperationClass.MUTATE)
+@tool(name='edit_mate', description="Edit a named distance/angle mate driver, or suppress a supported mate, in a verified assembly copy. Rejects driven dimensions. Does not save.", schema=MATE_SCHEMA, operation_class=OperationClass.MUTATE)
 def edit_mate(sw, feature_name, expected_type, suppressed=None, expected_suppressed=None, configuration=None, edit_original=False,
               action='suppression', dimension_name=None, value=None, expected_value=None, unit=None):
     if action == 'dimension':
@@ -145,7 +145,7 @@ def edit_mate(sw, feature_name, expected_type, suppressed=None, expected_suppres
     return _edit_suppression(sw, feature_name, expected_type, suppressed, expected_suppressed, configuration, edit_original, MATE_TYPES, True)
 
 
-@tool(name='edit_component_pattern', description='Edit Direction 1 instance count of a single-configuration LocalLPattern assembly copy, its explicit existing spacing dimension in the current configuration, or suppress LocalLPattern/LocalCirPattern. Verifies readback; does not save.', schema=PATTERN_SCHEMA, operation_class=OperationClass.MUTATE)
+@tool(name='edit_component_pattern', description="Edit instance count or spacing of a LocalLPattern in an assembly copy, or suppress a LocalLPattern/LocalCirPattern. Verifies readback; does not save.", schema=PATTERN_SCHEMA, operation_class=OperationClass.MUTATE)
 def edit_component_pattern(sw, feature_name, expected_type, suppressed=None, expected_suppressed=None, configuration=None, edit_original=False,
                            action='suppression', instances=None, expected_instances=None, dimension_name=None, spacing_mm=None, expected_spacing_mm=None):
     if action == 'linear_count':

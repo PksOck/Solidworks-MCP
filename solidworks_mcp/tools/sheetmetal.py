@@ -476,82 +476,60 @@ def _find_feature(doc, name):
 @tool(
     name="create_tab_and_slot",
     description=(
-        "Create a Tab and Slot feature that joins two bodies: a tab is grown "
-        "from one body's edge and a matching slot is cut in the other body's "
-        "face. Use the edge index from list_body_edges and the face index from "
-        "list_planar_faces; the edge must lie in the slot face's plane, on a "
-        "different body, facing the sheet it passes through. On flat sheets the "
-        "tab is a flat finger; on profiles (tubes) it is the rim edge of one "
-        "tube growing through the other tube's wall, so pass that wall's "
-        "thickness as tab_height_mm to stop the tab flush at the inner face. "
-        "Success is only reported when one body gains material and the other "
-        "loses it. Modifies the active part."
+        "Tab and Slot joining two bodies: tab grows from one body's edge (list_body_edges), slot is cut in the other body's face (list_planar_faces). Modifies the active part."
     ),
     schema={
         "type": "object",
         "properties": {
             "tab_edge_index": {
                 "type": "integer", "minimum": 0,
-                "description": "Tab edge index from list_body_edges",
             },
             "slot_face_index": {
                 "type": "integer", "minimum": 0,
-                "description": "Slot face index from list_planar_faces",
             },
             "tab_face_index": {
                 "type":"integer", "minimum":0,
-                "description":"Optional planar tab thickness face sharing the selected edge; use the tube wall for an oblique end cut.",
             },
             "tab_length_mm": {
                 "type": "number", "exclusiveMinimum": 0, "default": 10.0,
-                "description": "Tab length along the edge",
             },
             "tab_height_mm": {
                 "type": "number", "exclusiveMinimum": 0, "default": 6.0,
-                "description": ("How far the tab protrudes past its edge. Pass "
-                                "the target wall's thickness to stop the tab "
-                                "flush at that wall's inner face (the other face)."),
+                "description": ("Protrusion; use the wall thickness for tubes"),
             },
             "slot_clearance_mm": {
                 "type": "number", "minimum": 0, "default": 0.2,
-                "description": "Clearance of the slot around the tab",
             },
             "spacing": {
                 "type": "string", "enum": ["single", "equal", "length"],
                 "default": "single",
-                "description": "One tab, evenly spaced instances, or length-based",
             },
             "instances": {
                 "type": "integer", "minimum": 1, "default": 1,
-                "description": "Number of evenly spaced tabs when spacing is 'equal'",
+                "description": "When spacing is 'equal'",
             },
             "spacing_mm": {
                 "type": "number", "exclusiveMinimum": 0,
-                "description": "Tab spacing when spacing is 'length'",
+                "description": "When spacing is 'length'",
             },
             "edge_treatment": {
                 "type": "string", "enum": ["sharp", "fillet", "chamfer"],
-                "default": "sharp", "description": "Tab edge treatment",
+                "default": "sharp",
             },
             "edge_treatment_mm": {
                 "type": "number", "exclusiveMinimum": 0, "default": 1.0,
-                "description": "Fillet radius or chamfer distance",
             },
             "tab_thickness_mm": {
                 "type": "number", "exclusiveMinimum": 0,
-                "description": "Tab thickness; defaults to the sheet thickness",
             },
             "offset_from_edges": {
                 "type": "boolean", "default": False,
-                "description": "Offset the tabs/slots from the ends of the edge",
             },
             "start_offset_mm": {
                 "type": "number", "minimum": 0, "default": 0.0,
-                "description": "Offset from the start of the edge",
             },
             "end_offset_mm": {
                 "type": "number", "minimum": 0, "default": 0.0,
-                "description": "Offset from the end of the edge",
             },
         },
         "required": ["tab_edge_index", "slot_face_index"],

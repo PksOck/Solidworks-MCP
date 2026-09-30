@@ -223,34 +223,26 @@ def _open_part_for_insert(sw, filepath):
 @tool(
     name="insert_component",
     description=(
-        "Insert a Part or sub-assembly into the active assembly at a "
-        "given position. Position is in meters, assembly space. By default "
-        "the component's bounding-box centre lands on the point (SolidWorks "
-        "AddComponent5 behaviour); place='origin' instead puts the part's "
-        "own origin on the point, which needs the part already open."
+        "Insert a Part or sub-assembly into the active assembly at x,y,z (meters, assembly space)."
     ),
     schema={
         "type": "object",
         "properties": {
-            "filepath": {"type": "string", "description": "Full path to the .SLDPRT/.SLDASM to insert"},
-            "x": {"type": "number", "description": "X position in meters. Default 0."},
-            "y": {"type": "number", "description": "Y position in meters. Default 0."},
-            "z": {"type": "number", "description": "Z position in meters. Default 0."},
+            "filepath": {"type": "string", "description": "Full path to the .SLDPRT/.SLDASM"},
+            "x": {"type": "number", "description": "Meters, default 0"},
+            "y": {"type": "number", "description": "Meters, default 0"},
+            "z": {"type": "number", "description": "Meters, default 0"},
             "place": {
                 "type": "string",
                 "enum": ["center", "origin"],
                 "description": (
-                    "'center' (default) = AddComponent5 legacy behaviour, the "
-                    "part's bounding-box centre lands on x,y,z. 'origin' = the "
-                    "part's own origin lands on x,y,z."
+                    "'center' (default): bounding-box centre at x,y,z; 'origin': part origin (part must be open)"
                 ),
             },
             "configuration": {
                 "type": "string",
                 "description": (
-                    "Optional configuration name to insert, e.g. a Toolbox size "
-                    "like 'ISO 4762 M10 x 16 - 16N'. Default: the part's "
-                    "default configuration."
+                    "Configuration to insert, e.g. 'ISO 4762 M10 x 16 - 16N'; default the part's default"
                 ),
             },
         },

@@ -98,51 +98,45 @@ def _has_weldment_feature(doc) -> bool:
 @tool(
     name="create_structural_member",
     description=(
-        "Create a weldment structural member (WeldMemberFeat) from all "
-        "sketch segments in a named sketch, using a library profile. "
-        "Keep connected frame segments in one group with optional miter "
-        "corners, or put disconnected pickets into separate groups. "
-        "Creates the Weldment folder if needed. Modifies the active part."
+        "Weldment structural member from a named sketch's segments and a library profile; connected segments share a group (optional miters). Modifies the active part."
     ),
     schema={
         "type": "object",
         "properties": {
             "sketch_name": {
-                "type": "string",
-                "description": "Name of the sketch containing the path segments (e.g. 'Sketch1')"
+                "type": "string"
             },
             "profile_path": {
                 "type": "string",
-                "description": "Full path to a .sldlfp profile file, from list_weldment_profiles"
+                "description": "Path to a .sldlfp, from list_weldment_profiles"
             },
             "connected_segments_option": {
                 "type": "integer",
-                "description": "0=None, 1=Apply, 2=Apply for all. Default 1.",
+                "description": "0=None, 1=Apply, 2=Apply for all (default 1)",
                 "default": 1
             },
             "allow_protrusion": {
                 "type": "boolean",
-                "description": "Allow profile to protrude past sketch endpoints. Default true.",
                 "default": True
             },
             "separate_groups": {
                 "type": "boolean",
-                "description": "Use one group per segment from a single sketch. Required for disconnected pickets sharing one profile. Default false.",
+                "description": "One group per segment (default false)",
                 "default": False
             },
             "group_mode": {
                 "type": "string", "enum": ["auto", "all", "per_segment"],
-                "description": "auto keeps the default single group; all puts every segment in one group regardless of connectivity; per_segment uses one group per segment. Default auto.",
+                "description": "auto (default) | all (one group) | per_segment",
                 "default": "auto"
             },
             "corner_type": {
                 "type": "string", "enum": ["none", "miter"],
-                "description": "Corner treatment for connected segments in one group; miter sets swEndConditionMiter. Default none.",
+                "description": "Corner of connected segments; miter or none (default)",
                 "default": "none"
             },
             "segment_indices": {
                 "type": "array", "items": {"type": "integer", "minimum": 0},
-                "description": "Profile only these sketch-segment indices (from get_sketch_status order). Lets one sketch carry several profiles; omit for all segments."
+                "description": "Omit for all segments"
             }
         },
         "required": ["sketch_name", "profile_path"]
@@ -398,67 +392,50 @@ def _planar_end_faces(body):
 @tool(
     name="create_weldment_end_cap",
     description=(
-        "Cap the cut end of a hollow weldment member with an EndCap feature. "
-        "Caps the planar ends perpendicular to the member's longest axis "
-        "unless explicit planar-face indices are supplied. direction='inward' "
-        "puts the cap on the far side of the end face and flush with it; "
-        "'outward' makes it protrude; 'inset' recesses it by inset_mm. "
-        "Reports the total solid volume before and after so the added "
-        "material is provable. Modifies the active part."
+        "Cap the cut end of a hollow weldment member (EndCap). Auto-detects ends unless face_indices are given. Reports volume before and after. Modifies the active part."
     ),
     schema={
         "type": "object",
         "properties": {
             "body_name": {
-                "type": "string", "minLength": 1,
-                "description": "Name of the solid member body whose ends to cap"
+                "type": "string", "minLength": 1
             },
             "face_indices": {
                 "type": "array", "items": {"type": "integer", "minimum": 0},
-                "description": "Global planar-face indices from list_planar_faces. "
-                               "Omit to auto-detect the member's cut ends."
+                "description": "From list_planar_faces; omit to auto-detect"
             },
             "depth_mm": {
-                "type": "number", "minimum": 0.001, "default": 5.0,
-                "description": "End-cap thickness in millimetres"
+                "type": "number", "minimum": 0.001, "default": 5.0
             },
             "direction": {
                 "type": "string", "enum": ["inward", "outward", "inset"],
                 "default": "inward",
-                "description": "Side of the end face the cap occupies: inward (flush, "
-                               "default), outward (protruding), or inset"
+                "description": "inward (flush, default), outward (protruding) or inset"
             },
             "inset_mm": {
-                "type": "number", "minimum": 0.0, "default": 2.0,
-                "description": "Recess distance from the end for direction='inset'"
+                "type": "number", "minimum": 0.0, "default": 2.0
             },
             "chamfer": {
-                "type": "boolean", "default": False,
-                "description": "Chamfer the end cap corners instead of filleting them"
+                "type": "boolean", "default": False
             },
             "chamfer_mm": {
-                "type": "number", "minimum": 0.0, "default": 0.0,
-                "description": "Chamfer distance or fillet radius in millimetres"
+                "type": "number", "minimum": 0.0, "default": 0.0
             },
             "corner_treatment": {
-                "type": "boolean", "default": False,
-                "description": "Apply the corner treatment to the end cap"
+                "type": "boolean", "default": False
             },
             "reverse": {
-                "type": "boolean", "default": False,
-                "description": "Reverse the offset of the end cap"
+                "type": "boolean", "default": False
             },
             "given_offset": {
                 "type": "boolean", "default": False,
-                "description": "True uses offset_value_mm as the offset; false uses wall_thickness_ratio"
+                "description": "true: offset_value_mm; false: wall_thickness_ratio"
             },
             "offset_value_mm": {
-                "type": "number", "minimum": 0.0, "default": 0.0,
-                "description": "Offset distance in millimetres; used when given_offset is true"
+                "type": "number", "minimum": 0.0, "default": 0.0
             },
             "wall_thickness_ratio": {
-                "type": "number", "minimum": 0.01, "default": 0.6,
-                "description": "Offset as a ratio of the member wall; used when given_offset is false"
+                "type": "number", "minimum": 0.01, "default": 0.6
             }
         },
         "required": ["body_name"]
@@ -636,43 +613,31 @@ def _planar_face_by_index(doc, face_index):
 @tool(
     name="create_weldment_gusset",
     description=(
-        "Create a weldment gusset (triangular or polygonal plate) between two "
-        "supporting faces of two different solid members. The two faces must "
-        "face the inside of the joint (for a T-joint: the through member's face "
-        "and the butting member's near face) and meet at a real edge, so the "
-        "through member has to continue past the joint. Use planar-face indices "
-        "from list_planar_faces. Reports the total solid volume before and "
-        "after so the added plate is provable. Modifies the active part."
+        "Gusset plate between two faces (list_planar_faces) of different solid members that meet at a real edge. Reports volume before and after. Modifies the active part."
     ),
     schema={
         "type": "object",
         "properties": {
             "face_a_index": {
-                "type": "integer", "minimum": 0,
-                "description": "First supporting face (from list_planar_faces)"
+                "type": "integer", "minimum": 0
             },
             "face_b_index": {
-                "type": "integer", "minimum": 0,
-                "description": "Second supporting face, on a different body"
+                "type": "integer", "minimum": 0
             },
             "depth_mm": {
-                "type": "number", "minimum": 0.001, "default": 5.0,
-                "description": "Gusset plate thickness in millimetres"
+                "type": "number", "minimum": 0.001, "default": 5.0
             },
             "direction": {
                 "type": "string", "enum": ["both", "inner", "outer"],
-                "default": "both",
-                "description": "Which side of the reference plane carries the thickness"
+                "default": "both"
             },
             "location": {
                 "type": "string", "enum": ["center", "start", "end"],
-                "default": "center",
-                "description": "Location of the gusset profile reference plane"
+                "default": "center"
             },
             "profile": {
                 "type": "string", "enum": ["triangle", "polygon"],
-                "default": "triangle",
-                "description": "Gusset profile shape"
+                "default": "triangle"
             },
             "leg1_mm": {"type": "number", "minimum": 0.001, "default": 25.0},
             "leg2_mm": {"type": "number", "minimum": 0.001, "default": 25.0},
@@ -683,26 +648,21 @@ def _planar_face_by_index(doc, face_index):
                 "default": 45.0
             },
             "use_length_dim": {
-                "type": "boolean", "default": False,
-                "description": "Use leg4_mm instead of angle_deg"
+                "type": "boolean", "default": False
             },
             "offset": {
-                "type": "boolean", "default": False,
-                "description": "Offset the profile's reference plane"
+                "type": "boolean", "default": False
             },
             "offset_mm": {"type": "number", "minimum": 0.0, "default": 5.0},
             "reverse_dir": {"type": "boolean", "default": False},
             "reverse_face": {
-                "type": "boolean", "default": False,
-                "description": "Reverse leg1/leg2 (and leg3/leg4 for a polygon)"
+                "type": "boolean", "default": False
             },
             "crv_index": {
-                "type": "integer", "minimum": 0, "default": 0,
-                "description": "Edge index when several edges intersect"
+                "type": "integer", "minimum": 0, "default": 0
             },
             "chamfer": {
-                "type": "boolean", "default": False,
-                "description": "Chamfer the gusset under the weld bead"
+                "type": "boolean", "default": False
             },
             "chamfer1_mm": {"type": "number", "minimum": 0.0, "default": 12.5},
             "chamfer2_mm": {"type": "number", "minimum": 0.0, "default": 12.5},
@@ -711,8 +671,7 @@ def _planar_face_by_index(doc, face_index):
                 "default": 45.0
             },
             "use_length_dim_for_chamfer": {
-                "type": "boolean", "default": True,
-                "description": "Use chamfer2_mm instead of chamfer_angle_deg"
+                "type": "boolean", "default": True
             }
         },
         "required": ["face_a_index", "face_b_index"]

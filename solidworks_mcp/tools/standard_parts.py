@@ -649,28 +649,20 @@ def get_standard_part_sizes(sw, standard: str, type: str = "",
 @tool(
     name="insert_standard_part",
     description=(
-        "Insert a standard part (e.g. ISO 4017 M10 x 40) into the active "
-        "assembly at x,y,z. Resolves the part from the synced library and "
-        "delegates to insert_component. Pass size= (a string like 'ISO 4762 "
-        "M10 x 16 - 16N') to insert that exact Toolbox size: the part is "
-        "JIT-prepared (a writable copy is switched to the size configuration, "
-        "rebuilt and saved, then inserted). Fasteners require size=; their "
-        "unconfigured PreviewCfg/default geometry is not a real size. "
-        "DIN 934 nuts, DIN 125A washers M3-M30, and ISO 4762 M10x25 can be prepared "
-        "from master copies with geometry verification."
+        "Insert a standard part (e.g. ISO 4017 M10 x 40) into the active assembly at x,y,z via insert_component. Fasteners require size= (e.g. 'ISO 4762 M10 x 16 - 16N'), which prepares that Toolbox size."
     ),
     schema={
         "type": "object",
         "properties": {
-            "standard": {"type": "string", "description": "Standard id or folder, e.g. ISO, DIN."},
-            "type": {"type": "string", "description": "Substring of the part type, e.g. 'hex screw'."},
-            "file": {"type": "string", "description": "Exact master file name, to disambiguate."},
-            "size": {"type": "string", "description": "Materialised configuration, e.g. 'ISO 4762 M10 x 16 - 16N'."},
-            "x": {"type": "number", "description": "Position in meters. Default 0."},
-            "y": {"type": "number", "description": "Position in meters. Default 0."},
-            "z": {"type": "number", "description": "Position in meters. Default 0."},
+            "standard": {"type": "string", "description": "Standard id or folder, e.g. ISO, DIN"},
+            "type": {"type": "string", "description": "Part type substring, e.g. 'hex screw'"},
+            "file": {"type": "string", "description": "Exact master file name"},
+            "size": {"type": "string", "description": "Configuration, e.g. 'ISO 4762 M10 x 16 - 16N'"},
+            "x": {"type": "number", "description": "Meters, default 0"},
+            "y": {"type": "number", "description": "Meters, default 0"},
+            "z": {"type": "number", "description": "Meters, default 0"},
             "place": {"type": "string", "enum": ["center", "origin"],
-                      "description": "Same semantics as insert_component."},
+                      "description": "As in insert_component"},
         },
         "required": ["standard"],
     },
