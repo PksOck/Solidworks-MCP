@@ -36,3 +36,5 @@ Use apply_parameter_changes for explicit old/new dimension batches, with optiona
 root assembly rebuild. Batch failure may leave partial changes; no rollback claim.
 Showing only the final result is allowed. Verify exact file paths and distinguish
 COM activation from confirmed visibility on the user's desktop.
+Every tool also accepts an optional operation_id string: repeating a call with the
+same operation_id returns the recorded result and never runs the operation twice.

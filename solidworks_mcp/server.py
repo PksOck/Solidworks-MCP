@@ -109,25 +109,6 @@ def _execute_python_tool() -> Tool:
 # Tool Definitions
 # ============================================================================
 
-def _with_operation_id(tool_definition: Tool) -> Tool:
-    """Advertise the shared idempotency key without changing domain schemas."""
-    schema = dict(tool_definition.inputSchema)
-    properties = dict(schema.get("properties", {}))
-    properties["operation_id"] = {
-        "type": "string",
-        "minLength": 1,
-        "description": (
-            "Optional client idempotency key. Reusing it returns the recorded result "
-            "and never repeats the operation."
-        ),
-    }
-    schema["properties"] = properties
-    return Tool(
-        name=tool_definition.name,
-        description=tool_definition.description,
-        inputSchema=schema,
-    )
-
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available SolidWorks tools"""
@@ -479,7 +460,7 @@ async def list_tools() -> list[Tool]:
             }
         ),
     ] + ([] if config.guarded_mode else [_execute_python_tool()]) + registered_tools()
-    return [_with_operation_id(tool_definition) for tool_definition in tools]
+    return tools
 
 
 # ============================================================================

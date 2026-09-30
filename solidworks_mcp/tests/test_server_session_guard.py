@@ -61,13 +61,13 @@ class ServerSessionGuardTests(unittest.TestCase):
         self.assertIn("bind_active_document", names)
         self.assertIn('"document_id": "doc-1"', response[0].text)
 
-    def test_all_advertised_tools_accept_optional_operation_id(self):
+    def test_schemas_omit_operation_id_and_instructions_explain_it(self):
         advertised = asyncio.run(server.list_tools())
 
         for advertised_tool in advertised:
             with self.subTest(tool=advertised_tool.name):
-                self.assertIn("operation_id", advertised_tool.inputSchema["properties"])
-                self.assertNotIn("operation_id", advertised_tool.inputSchema.get("required", []))
+                self.assertNotIn("operation_id", advertised_tool.inputSchema.get("properties", {}))
+        self.assertIn("operation_id", server.modeling_guidance.server_instructions())
 
     def test_legacy_mutation_rejects_focus_change_before_handler(self):
         automation = FakeAutomation(mismatch=True)
