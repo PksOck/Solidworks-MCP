@@ -45,6 +45,7 @@ from . import session  # noqa: F401
 from . import features_basic  # noqa: F401
 from . import sketch_basic  # noqa: F401
 from . import documents  # noqa: F401
+from . import connection  # noqa: F401
 
 __all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements", "views", "history", "reference_geometry", "advanced_features", "surface_features", "properties", "configurations", "body_features", "appearance", "material", "equations", "sketch_edit", "sketch_entities", "drawing_annotations", "saving", "imports", "standard_parts", "simulation"]
 

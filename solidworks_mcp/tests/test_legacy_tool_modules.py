@@ -38,6 +38,14 @@ class MovedToolTests(unittest.TestCase):
             "get_document_info": (READ, None), "list_open_documents": (READ, None),
         })
 
+    def test_connection(self):
+        self.assertMoved("connection", {
+            "get_modeling_guide": (READ, None), "get_solidworks_info": (READ, None),
+            "get_capabilities": (READ, None), "connect_solidworks": (SESSION, None),
+            "set_units": (SESSION, None), "bind_active_document": (SESSION, "bound"),
+            "execute_python": (OperationClass.RAW_EXECUTION, None),
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

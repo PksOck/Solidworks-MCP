@@ -6,7 +6,7 @@ enabled toolsets still executes, so a stale client list never breaks work.
 
 import logging
 import os
-from typing import Iterable, List, Optional
+from typing import List, Optional
 
 from mcp.types import Tool
 
@@ -35,16 +35,7 @@ TOOLSETS = {
 }
 _MODULE_TOOLSET = {module: name for name, modules in TOOLSETS.items() for module in modules}
 
-# Tools still defined inline in server.py; removed when they move to tools/ (plan B).
-_LEGACY_TOOLSETS = {
-    **dict.fromkeys(("get_modeling_guide", "connect_solidworks", "get_solidworks_info",
-                     "get_capabilities", "bind_active_document", "set_units", "execute_python"), "core"),
-}
-
-
 def toolset_of(name: str) -> Optional[str]:
-    if name in _LEGACY_TOOLSETS:
-        return _LEGACY_TOOLSETS[name]
     module = tool_module_for(name)
     return _MODULE_TOOLSET.get(module.rsplit(".", 1)[-1]) if module else None
 
@@ -63,15 +54,19 @@ def enabled_toolsets() -> List[str]:
     return sorted({"core"} | {name for name in requested if name in TOOLSETS})
 
 
-def advertised_tools(extra: Iterable[Tool] = ()) -> List[Tool]:
+def advertised_tools() -> List[Tool]:
     """Tools a client should see; unmapped tools are never hidden."""
     enabled = set(enabled_toolsets())
     guarded = get_config().guarded_mode
     result = []
-    for item in list(extra) + registered_tools():
+    for item in registered_tools():
         if guarded and item.name == "execute_python":
             continue
         toolset = toolset_of(item.name)
         if toolset is None or toolset in enabled:
             result.append(item)
     return result
+
+
+def advertised_tool_names() -> set[str]:
+    return {item.name for item in advertised_tools()}
