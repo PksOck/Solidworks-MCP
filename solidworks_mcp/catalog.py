@@ -44,8 +44,6 @@ _LEGACY_TOOLSETS = {
     **dict.fromkeys(("create_sketch", "create_sketch_on_face", "draw_line", "draw_circle",
                      "draw_rectangle", "draw_arc", "draw_polygon", "draw_spline",
                      "draw_arc_3point", "draw_slot", "close_sketch", "get_sketch_status"), "sketch"),
-    **dict.fromkeys(("extrude_sketch", "cut_extrude", "revolve_sketch", "fillet_edges",
-                     "chamfer_edges", "list_features"), "features"),
 }
 
 

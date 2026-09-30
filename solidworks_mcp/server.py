@@ -35,7 +35,6 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 
 # Local imports
 from .automation import SolidWorksAutomation
-from .comutil import com
 from .constants import SwErrors
 from .config import get_config, save_config
 from .core.policy import OperationClass
@@ -81,11 +80,6 @@ _LEGACY_OPERATION_CLASSES = {
     "draw_spline": OperationClass.MUTATE,
     "draw_arc_3point": OperationClass.MUTATE,
     "draw_slot": OperationClass.MUTATE,
-    "extrude_sketch": OperationClass.MUTATE,
-    "cut_extrude": OperationClass.MUTATE,
-    "revolve_sketch": OperationClass.MUTATE,
-    "fillet_edges": OperationClass.MUTATE,
-    "chamfer_edges": OperationClass.MUTATE,
     "close_sketch": OperationClass.MUTATE,
     "execute_python": OperationClass.RAW_EXECUTION,
 }
@@ -359,88 +353,6 @@ def _legacy_tools() -> list[Tool]:
                 },
                 "required": ["x1", "y1", "x2", "y2", "width"]
             }
-        ),
-        
-        # Feature Tools
-        Tool(
-            name="extrude_sketch",
-            description="Extrude the active sketch (Boss-Extrude).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "depth": {"type": "number", "default": 10, "description": "Extrusion depth"},
-                    "both_directions": {"type": "boolean", "default": False, "description": "Extrude in both directions"},
-                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
-                         "description": "Unit; omitted = session default (set_units)"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="cut_extrude",
-            description="Cut extrude to remove material.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "depth": {"type": "number", "default": 10, "description": "Cut depth"},
-                    "through_all": {"type": "boolean", "default": False, "description": "Cut through all"},
-                    "both_directions": {"type": "boolean", "default": False, "description": "Cut both directions"},
-                    "flip_direction": {"type": "boolean", "description": "Explicit cut direction; omit to retry the opposite direction automatically"},
-                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
-                         "description": "Unit; omitted = session default (set_units)"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="revolve_sketch",
-            description="Revolve the latest closed sketch around its construction centerline.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "angle": {"type": "number", "exclusiveMinimum": 0,
-                              "maximum": 360, "default": 360,
-                              "description": "Revolution angle in degrees"},
-                    "axis": {"type": "string", "enum": ["centerline"],
-                             "default": "centerline",
-                             "description": "Supported axis mode"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="fillet_edges",
-            description="Add a constant-radius fillet to the edges through edge_points (or the selected edges).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "radius": {"type": "number", "default": 2, "description": "Fillet radius"},
-                    "edge_points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "description": "Points [x, y, z] (in unit) lying on the edges to treat; omit to use the current selection"},
-                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
-                         "description": "Unit; omitted = session default (set_units)"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="chamfer_edges",
-            description="Add an angle-distance chamfer to the edges through edge_points (or the selected edges).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "distance": {"type": "number", "default": 2, "description": "Chamfer distance"},
-                    "angle": {"type": "number", "default": 45, "description": "Chamfer angle (degrees)"},
-                    "edge_points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "description": "Points [x, y, z] (in unit) lying on the edges to treat; omit to use the current selection"},
-                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
-                         "description": "Unit; omitted = session default (set_units)"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="list_features",
-            description="List all features in the model.",
-            inputSchema={"type": "object", "properties": {}, "required": []}
         ),
         
         # Sketch Management Tools
@@ -770,47 +682,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 arguments.get("x2"), arguments.get("y2"),
                 arguments.get("width"), arguments.get("unit"))
         
-        # Feature Tools
-        elif name == "extrude_sketch":
-            result = sw_automation.extrude_sketch(
-                arguments.get("depth", 10),
-                arguments.get("both_directions", False),
-                arguments.get("unit")
-            )
-        
-        elif name == "cut_extrude":
-            result = sw_automation.cut_extrude(
-                arguments.get("depth", 10),
-                arguments.get("through_all", False),
-                arguments.get("both_directions", False),
-                arguments.get("unit"),
-                arguments.get("flip_direction")
-            )
-
-        elif name == "revolve_sketch":
-            result = sw_automation.revolve_sketch(
-                arguments.get("angle", 360),
-                arguments.get("axis", "centerline")
-            )
-        
-        elif name == "fillet_edges":
-            result = sw_automation.fillet_edges(
-                arguments.get("radius", 2),
-                arguments.get("unit"),
-                arguments.get("edge_points"),
-            )
-        
-        elif name == "chamfer_edges":
-            result = sw_automation.chamfer_edges(
-                arguments.get("distance", 2),
-                arguments.get("angle", 45),
-                arguments.get("unit"),
-                arguments.get("edge_points"),
-            )
-        
-        elif name == "list_features":
-            result = _list_features_fixed()
-        
         # Sketch Management Tools
         elif name == "close_sketch":
             result = _close_sketch_handler()
@@ -1024,74 +895,6 @@ def _execute_python_fixed(code: str) -> Dict:
             }
         }
 
-
-# ============================================================================
-# FIXED: list_features
-# ============================================================================
-
-def _list_features_fixed() -> Dict:
-    """
-    List all features in the active document.
-    FIXED v4.1: Property access for SW 2025 (FirstFeature, GetNextFeature, GetTypeName2).
-    """
-    try:
-        doc, err = sw_automation.get_active_doc()
-        if err:
-            return err
-        
-        features = []
-
-        # FIXED (B17): CDispatch.__call__ always reports callable()==True even for
-        # properties, so `if callable(x): x()` invokes properties as if they were
-        # methods and raises "Member not found", which the bare except then
-        # misread as "end of feature tree" -- stopping after the first feature.
-        # com() resolves this correctly via inspect.ismethod().
-        feat = com(doc, "FirstFeature")
-
-        while feat is not None:
-            try:
-                name = com(feat, "Name")
-            except:
-                name = "<unknown>"
-
-            try:
-                feat_type = com(feat, "GetTypeName2")
-            except:
-                try:
-                    feat_type = com(feat, "GetTypeName")
-                except:
-                    feat_type = "<unknown>"
-
-            try:
-                suppressed = com(feat, "IsSuppressed")
-            except:
-                suppressed = False
-
-            features.append({
-                "name": name,
-                "type": feat_type,
-                "suppressed": bool(suppressed)
-            })
-
-            feat = com(feat, "GetNextFeature")
-        
-        return {
-            "success": True,
-            "message": f"{len(features)} features found",
-            "error_code": 0,
-            "error_name": "swSuccess",
-            "data": {"features": features, "count": len(features)}
-        }
-        
-    except Exception as e:
-        logger.error(f"List features error: {e}\n{traceback.format_exc()}")
-        return {
-            "success": False,
-            "message": f"Error: {e}",
-            "error_code": 999,
-            "error_name": "swUnknownError",
-            "data": {}
-        }
 
 # ============================================================================
 # NEW: close_sketch handler
