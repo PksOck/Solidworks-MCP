@@ -21,4 +21,24 @@ Status: priporočeni postopek, ne potrjen celoten proizvodni primer.
    reference brez blokiranega Pack and Go. Pri predaji ponovno preveri poti
    do vseh uporabljenih dokumentov in stanje vezi.
 
+## Znane pasti
+
+- AddComponent5 postavi komponento po svojem središču, ki ni središče
+  bounding boxa. Po vstavitvi preberi Transform2. Prvo vstavljeno komponento
+  fiksiraj (`set_component_fixed`).
+- Položaj, nastavljen s transformom, ni vez. Za risbe in spremembe mer
+  dodaj vezi; brez njih sestav ni parametričen.
+- Enaka osnovna imena datotek v različnih revizijskih mapah povzročijo, da
+  SolidWorks naloži napačno kopijo. Uporabi enolična imena po reviziji in
+  preveri pot vsake komponente.
+- Odsotnost interference ne dokazuje stika. Stik preveri posebej z
+  razdaljo med ploskvama.
+- Zrcaljenje predloge, katere izhodišče ni v središču:
+  tx_novo = 2·m − tx − 2·cx (m je zrcalna ravnina, cx lokalno središče).
+- Preveč naloženih dokumentov vodi v `swFileLoadError` ali pomanjkanje virov
+  okna. Zapri samo shranjene izhodne dokumente brez shranjevanja; nikoli
+  izvirnikov ali neshranjenih dokumentov.
+- Modalno okno dodatka (npr. izjema Inspection) blokira avtomatizacijo,
+  dokler ga uporabnik ne zapre.
+
 [Assembly Modeling](../references/modules/04-assembly-modeling.md)

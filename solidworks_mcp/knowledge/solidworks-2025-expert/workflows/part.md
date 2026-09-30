@@ -28,4 +28,22 @@ Razpoložljivost orodja in njegov posamičen test nista dokaz za ta model.
    robustnost pri spremembah dokazana. Shrani/izvozi po uporabnikovem
    naročilu in pravilih izhodnih poti.
 
+## Znane pasti
+
+- Koordinate skice niso globalne. Na ploskvi ali zamaknjeni ravnini točke
+  pretvori z ModelToSketchTransform; `create_sketch_on_face` ne vrne ključa
+  skice, zato ime preberi iz `list_features`.
+- Pri lastnem MathTransform nastavi ArrayData in jo preberi nazaj; tvorba
+  transforma lahko tiho prezre vhod.
+- Zdrava funkcija reza ne dokazuje pravilne strani odvzema. Preveri
+  ohranjeno telo (volumen, bounding box), še posebej pri obrnjeni smeri.
+- `create_reference_plane` zahteva točno ime ravnine (npr. "Right Plane");
+  `create_sketch_on_plane` sprejme tudi kratko ime. Preberi `list_planes`.
+- Zaokrožene vogale plošče raje nariši kot loke v osnovnem profilu kot
+  fillet z izbiro roba po točki zaslona (izbor lahko ostane prazen).
+- Samodejno popolno definiranje skice ne da kakovostnih kot za risbo;
+  kote, ki nosijo namero, dodaj sam in jih veži na obstoječe parametre.
+- Obstoječi parametri so vir mer: vrednost vzemi iz gradbene skripte ali
+  zapisa dokaza in jo veži na skico, ne modeliraj znova.
+
 [Part Modeling](../references/modules/02-part-modeling.md)

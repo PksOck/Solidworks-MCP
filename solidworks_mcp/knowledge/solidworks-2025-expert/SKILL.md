@@ -5,8 +5,8 @@ description: >-
   SOLIDWORKS 2025 user interface, features, workflows, modules and licensing,
   interactive parameter editing and task-specific CAD control panels,
   or when writing a SOLIDWORKS workbook chapter. For construction decisions
-  use mechanical-design-engineer; for this project's MCP tool calls use
-  solidworks-mcp when those skills are available.
+  use mechanical-design-engineer when available; for MCP tool calls read
+  workflow/operating.
 ---
 
 # SOLIDWORKS 2025: pomoč pri uporabi in učenju
@@ -84,7 +84,7 @@ skupnega parta od zamenjave ene pojavitve z ločeno kopijo.
   uporabi `mechanical-design-engineer`, če je na voljo. Ta skill pojasnjuje
   funkcije SOLIDWORKS in njihovo pravilno uporabo.
 - Za dejanske klice lokalnega SolidWorks MCP in stanje odprtih dokumentov
-  uporabi `solidworks-mcp`, če je na voljo. Ne izmišljaj imen ali učinkov MCP
+  preberi `workflow/operating` in trenutne sheme orodij. Ne izmišljaj imen ali učinkov MCP
   orodij iz splošnega znanja o SOLIDWORKS.
 - Če drugega skilla ali žive povezave ni, lahko opišeš postopek v uporabniškem
   vmesniku, vendar ne trdi, da si model pregledal ali spremenil.

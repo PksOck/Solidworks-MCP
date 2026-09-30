@@ -28,4 +28,22 @@ Celotna izdelava stopniščne ograje še zahteva preizkus na ločenem projektu.
    spremembi višine/naklona ponovi odvisne kontrole. Geometrijska kontrola
    ni statični izračun ali dokaz skladnosti s predpisom.
 
+## Znane pasti
+
+- Varjenec lahko preklopi konfiguracijo (npr. AsMachined); po operaciji
+  ponovno veži dokument in preveri aktivno konfiguracijo.
+- Ravna ploskev RHS je ožja od ovojnice zaradi zaobljenih vogalov (npr.
+  96 mm pri 100 mm profilu). Priključne plošče meri na ravno ploskev.
+- Tab & Slot: zračnost se prišteje dvakrat po dolžini in enkrat po širini.
+  "Success" ali brez spremembe geometrije lahko pomeni zanemarljiv rez;
+  preveri volumen obeh teles. Potreben je zadosten odmik od robov. Na
+  poševni ploskvi cevi nativni Tab & Slot lahko postavi oglišča izven
+  ovojnice cevi; tam uporabi ročni izvlek/rez. Po zavrženem poskusu
+  ponovno naštej ploskve.
+- Save Bodies: najprej zapri začasne sestave, podaj izrecno pot sestava,
+  preveri volumen in število teles vsakega otroka; vrstnega reda teles ne
+  privzemi.
+- Identiteta COM ovojnice roba ni identiteta roba v DXF; zaprti krožni robovi
+  nimajo oglišč.
+
 [Weldments](../references/modules/07-weldments.md)
