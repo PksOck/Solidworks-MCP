@@ -23,5 +23,14 @@ class MovedToolTests(unittest.TestCase):
         })
 
 
+    def test_sketch_basic(self):
+        names = ("create_sketch", "create_sketch_on_face", "draw_line", "draw_circle",
+                 "draw_rectangle", "draw_arc", "draw_polygon", "draw_spline",
+                 "draw_arc_3point", "draw_slot", "close_sketch")
+        expected = {name: (MUTATE, None) for name in names}
+        expected["get_sketch_status"] = (READ, None)
+        self.assertMoved("sketch_basic", expected)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -41,9 +41,6 @@ _LEGACY_TOOLSETS = {
                      "get_capabilities", "bind_active_document", "set_units", "execute_python",
                      "create_new_part", "create_new_assembly", "open_document", "close_document",
                      "get_document_info", "list_open_documents"), "core"),
-    **dict.fromkeys(("create_sketch", "create_sketch_on_face", "draw_line", "draw_circle",
-                     "draw_rectangle", "draw_arc", "draw_polygon", "draw_spline",
-                     "draw_arc_3point", "draw_slot", "close_sketch", "get_sketch_status"), "sketch"),
 }
 
 
