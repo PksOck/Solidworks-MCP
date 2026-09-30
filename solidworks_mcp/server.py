@@ -44,6 +44,7 @@ from .core.progress import progress_scope
 from . import catalog
 from .com_worker import run_beside_com, run_com
 from .registry import execute, needs_com_thread
+from .session_monitor import monitor as session_monitor
 from .knowledge import library as modeling_guidance
 
 # Configure logging
@@ -170,7 +171,7 @@ def _replay_payload(operation_id: str, replay: OperationResult) -> Dict:
     })
 
 
-def _operation_result(operation_id: str, execution) -> OperationResult:
+def _operation_result(operation_id: str, execution, warnings: tuple = ()) -> OperationResult:
     result = execution.result
     detail = dict(result.get("data", {}))
     if result.get("success"):
@@ -180,6 +181,7 @@ def _operation_result(operation_id: str, execution) -> OperationResult:
             target_before=execution.target_before,
             target_after=execution.target_after,
             data=detail,
+            warnings=warnings,
         )
     else:
         operation_result = OperationResult(
@@ -188,6 +190,7 @@ def _operation_result(operation_id: str, execution) -> OperationResult:
             target_before=execution.target_before,
             target_after=execution.target_after,
             data=detail,
+            warnings=warnings,
             errors=(OperationError(
                 code=detail.get("code", result.get("error_name", "COM_ERROR")),
                 message=result.get("message", "Operation failed."),
@@ -197,9 +200,9 @@ def _operation_result(operation_id: str, execution) -> OperationResult:
     return operation_result
 
 
-def _record(operation_id: str, execution) -> Dict:
+def _record(operation_id: str, execution, warnings: tuple = ()) -> Dict:
     """Journal one execution and return the payload sent to the client."""
-    operation_result = _operation_result(operation_id, execution)
+    operation_result = _operation_result(operation_id, execution, warnings)
     operation_journal.record(operation_result)
     payload = operation_result.to_dict(legacy=execution.result)
     _remember_payload(operation_id, payload)
@@ -254,9 +257,16 @@ def _progress_reporter():
 
 
 def _run_tool(reporter, name: str, sw, arguments: Dict):
-    """Runs on the COM thread."""
+    """Runs on the COM thread (or beside it); returns the execution and session warnings."""
     with progress_scope(reporter):
-        return execute(name, sw, arguments)
+        execution = execute(name, sw, arguments)
+    warnings = ()
+    if needs_com_thread(name):
+        try:
+            warnings = tuple(session_monitor.observe(sw, name, bool(execution.result.get("success"))))
+        except Exception as error:
+            logger.debug(f"Session monitor skipped: {error}")
+    return execution, warnings
 
 
 _background: set = set()
@@ -266,10 +276,10 @@ async def _execute_and_record(operation_id: str, name: str, reporter, arguments:
     """Run one call and journal its outcome, even when the client has stopped waiting."""
     try:
         run = run_com if needs_com_thread(name) else run_beside_com
-        execution = await run(_run_tool, reporter, name, sw_automation, arguments)
+        execution, warnings = await run(_run_tool, reporter, name, sw_automation, arguments)
         if _is_rejected(execution):
             return _reject(operation_id, execution)
-        return _record(operation_id, execution)
+        return _record(operation_id, execution, warnings)
     except Exception as error:
         logger.error(f"Tool error: {error}\n{traceback.format_exc()}")
         return _record_exception(operation_id, error)

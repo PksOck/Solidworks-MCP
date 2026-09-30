@@ -124,5 +124,66 @@ class WarningTests(unittest.TestCase):
         self.assertEqual((), watcher.observe(Automation(), "open_document", True))
 
 
+import asyncio
+from unittest import mock
+
+from solidworks_mcp import server
+from solidworks_mcp.core.policy import OperationClass
+from solidworks_mcp.registry import _TOOLS, tool
+
+
+class ResultAutomation:
+    is_connected = False
+
+    def _result(self, success, message, error_code=0, data=None):
+        return {"success": success, "message": message, "error_code": int(error_code),
+                "error_name": "test", "data": data or {}}
+
+
+class ServerWiringTests(unittest.TestCase):
+    NAME = "_test_monitored"
+    BESIDE = "_test_monitored_beside"
+
+    def setUp(self):
+        self.original = server.sw_automation
+        server.sw_automation = ResultAutomation()
+
+        @tool(name=self.NAME, description="test", schema={"type": "object", "properties": {}},
+              operation_class=OperationClass.READ)
+        def handler(sw):
+            return sw._result(True, "read")
+
+        @tool(name=self.BESIDE, description="test", schema={"type": "object", "properties": {}},
+              operation_class=OperationClass.READ, com=False)
+        def beside(sw):
+            return sw._result(True, "read")
+
+    def tearDown(self):
+        server.sw_automation = self.original
+        _TOOLS.pop(self.NAME, None)
+        _TOOLS.pop(self.BESIDE, None)
+
+    def test_monitor_warning_reaches_the_response(self):
+        with mock.patch.object(server.session_monitor, "observe",
+                               return_value=("Long SolidWorks session: test.",)) as observe:
+            response = asyncio.run(server.call_tool(self.NAME, {}))
+        observe.assert_called_once_with(server.sw_automation, self.NAME, True)
+        self.assertTrue(response[0].text.startswith("[SUCCESS] read"))
+        self.assertIn("Long SolidWorks session: test.", response[0].text)
+
+    def test_monitor_failure_never_breaks_the_result(self):
+        with mock.patch.object(server.session_monitor, "observe",
+                               side_effect=RuntimeError("COM gone")):
+            response = asyncio.run(server.call_tool(self.NAME, {}))
+        self.assertTrue(response[0].text.startswith("[SUCCESS] read"))
+        self.assertNotIn("COM gone", response[0].text)
+
+    def test_tool_that_never_touches_com_skips_the_monitor(self):
+        with mock.patch.object(server.session_monitor, "observe") as observe:
+            response = asyncio.run(server.call_tool(self.BESIDE, {}))
+        observe.assert_not_called()
+        self.assertTrue(response[0].text.startswith("[SUCCESS] read"))
+
+
 if __name__ == "__main__":
     unittest.main()
