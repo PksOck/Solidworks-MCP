@@ -89,6 +89,12 @@ odprt neshranjen, spremenjen ali dokument izven odobrenih izhodnih map; brez
 uporabnik ponovni zagon odobril. Po zagonu je seja prazna: dokumente odpri
 znova in ponovno veži cilj.
 
+Strežnik po vsakem orodju šteje odprte in zaprte dokumente in občasno vzorči
+GPU pomnilnik (`session.counters`). Ob ≥ 4096 MB ali ≥ 200 zaprtih dokumentih
+doda v odgovor opozorilo "Long SolidWorks session" (največ na 15 min). Takrat
+dokončaj trenutni korak, predlagaj shranjevanje in vprašaj uporabnika za
+ponovni zagon; `close_saved_outputs` zapre samo shranjene izhodne dokumente.
+
 - **`operation_id`** je idempotenten ključ: ponovitev z istim ključem vrne
   zapisan izid brez ponovne izvedbe. Uporabi ga, ko prejšnji odgovor ni
   prišel. Za drugačno operacijo nov ključ.
