@@ -70,5 +70,72 @@ class ValidateArgumentsTests(unittest.TestCase):
         self.assertEqual({"x": 1}, validate_arguments(schema, Draft7Validator(schema), {"x": 1}))
 
 
+from solidworks_mcp.core.contracts import DocumentRef
+from solidworks_mcp.core.policy import OperationClass
+from solidworks_mcp.registry import _TOOLS, execute, registered_tools, tool
+
+
+class Automation:
+    def __init__(self):
+        self.binds = 0
+        self.calls = []
+
+    def has_bound_document(self):
+        return False
+
+    def bind_active_document(self):
+        self.binds += 1
+        return DocumentRef("doc-1", None, "part", "Default", "mcp:0")
+
+    def mark_active_document_mutated(self, before):
+        return before
+
+    def _result(self, success, message, error_code=0, data=None):
+        return {"success": success, "message": message, "error_code": int(error_code),
+                "error_name": "test", "data": data or {}}
+
+
+class ExecuteValidationTests(unittest.TestCase):
+    NAME = "_test_validation"
+
+    def setUp(self):
+        @tool(name=self.NAME, description="test", schema=SCHEMA,
+              operation_class=OperationClass.MUTATE)
+        def handler(sw, file_path, depth=10, unit=None, points=None):
+            sw.calls.append((file_path, depth, unit))
+            return sw._result(True, "done")
+
+    def tearDown(self):
+        _TOOLS.pop(self.NAME, None)
+
+    def test_invalid_call_stops_before_binding_and_handler(self):
+        sw = Automation()
+        result = execute(self.NAME, sw, {"filepath": "a"}).result
+        self.assertFalse(result["success"])
+        self.assertEqual(107, result["error_code"])
+        self.assertEqual({"code": "VALIDATION_FAILED", "argument": "filepath"}, result["data"])
+        self.assertIn("Did you mean 'file_path'?", result["message"])
+        self.assertEqual(0, sw.binds)
+        self.assertEqual([], sw.calls)
+
+    def test_none_values_fall_back_to_handler_defaults(self):
+        sw = Automation()
+        self.assertTrue(execute(self.NAME, sw, {"file_path": "a", "depth": None}).result["success"])
+        self.assertEqual([("a", 10, None)], sw.calls)
+
+    def test_validator_is_built_once(self):
+        execute(self.NAME, Automation(), {"file_path": "a"})
+        validator = _TOOLS[self.NAME]["validator"]
+        execute(self.NAME, Automation(), {"file_path": "b"})
+        self.assertIs(validator, _TOOLS[self.NAME]["validator"])
+
+
+class AdvertisedSchemaTests(unittest.TestCase):
+    def test_every_schema_is_valid_draft7(self):
+        for item in registered_tools():
+            with self.subTest(tool=item.name):
+                Draft7Validator.check_schema(item.inputSchema)
+
+
 if __name__ == "__main__":
     unittest.main()

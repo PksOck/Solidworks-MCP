@@ -9,11 +9,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from jsonschema import Draft7Validator
 from mcp.types import Tool
 
 from .constants import SwErrors
 from .core.policy import OperationClass
 from .core.session import TargetMismatchError
+from .validation import ArgumentError, validate_arguments
 
 logger = logging.getLogger("SolidWorksMCP")
 
@@ -117,6 +119,18 @@ def execute(name: str, sw, arguments: Dict) -> Execution:
     entry = _TOOLS.get(name)
     if entry is None:
         return Execution(sw._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError))
+    validator = entry.get("validator")
+    if validator is None:
+        validator = entry["validator"] = Draft7Validator(entry["tool"].inputSchema)
+    try:
+        arguments = validate_arguments(entry["tool"].inputSchema, validator, arguments)
+    except ArgumentError as error:
+        return Execution(sw._result(
+            False,
+            str(error),
+            SwErrors.swInvalidInput,
+            {"code": "VALIDATION_FAILED", "argument": error.argument},
+        ))
     before = None
     if entry["operation_class"] in _GUARDED_CLASSES and hasattr(sw, "bind_active_document"):
         try:
