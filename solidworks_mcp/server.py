@@ -224,7 +224,8 @@ async def list_tools() -> list[Tool]:
                     "x": {"type": "number", "default": 0, "description": "X coordinate on the face"},
                     "y": {"type": "number", "default": 0, "description": "Y coordinate on the face"},
                     "z": {"type": "number", "default": 0, "description": "Z coordinate on the face"},
-                    "unit": {"type": "string", "description": "Unit (mm, inch, m)"},
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"},
                     "exact_geometry": {"type": "boolean", "default": False, "description": "Disable automatic sketch relations and snapping for exact programmatic geometry"}
                 },
                 "required": []
@@ -240,7 +241,8 @@ async def list_tools() -> list[Tool]:
                     "y1": {"type": "number", "default": 0, "description": "Start Y"},
                     "x2": {"type": "number", "default": 100, "description": "End X"},
                     "y2": {"type": "number", "default": 0, "description": "End Y"},
-                    "unit": {"type": "string", "description": "Unit (mm, inch, m)"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -254,7 +256,8 @@ async def list_tools() -> list[Tool]:
                     "x": {"type": "number", "default": 0, "description": "Center X"},
                     "y": {"type": "number", "default": 0, "description": "Center Y"},
                     "radius": {"type": "number", "default": 25, "description": "Radius"},
-                    "unit": {"type": "string", "description": "Unit (mm, inch, m)"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -269,7 +272,8 @@ async def list_tools() -> list[Tool]:
                     "y1": {"type": "number", "default": -25, "description": "First corner Y"},
                     "x2": {"type": "number", "default": 50, "description": "Second corner X"},
                     "y2": {"type": "number", "default": 25, "description": "Second corner Y"},
-                    "unit": {"type": "string", "description": "Unit (mm, inch, m)"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -285,7 +289,8 @@ async def list_tools() -> list[Tool]:
                     "radius": {"type": "number", "default": 25, "description": "Radius"},
                     "start_angle": {"type": "number", "default": 0, "description": "Start angle (degrees)"},
                     "end_angle": {"type": "number", "default": 90, "description": "End angle (degrees)"},
-                    "unit": {"type": "string", "description": "Unit for radius"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -300,7 +305,8 @@ async def list_tools() -> list[Tool]:
                     "cy": {"type": "number", "default": 0, "description": "Center Y"},
                     "radius": {"type": "number", "default": 25, "description": "Radius"},
                     "sides": {"type": "integer", "default": 6, "description": "Number of sides (3-100)"},
-                    "unit": {"type": "string", "description": "Unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -316,7 +322,8 @@ async def list_tools() -> list[Tool]:
                         "items": {"type": "array", "minItems": 2, "maxItems": 2,
                                   "items": {"type": "number"}}
                     },
-                    "unit": {"type": "string", "description": "Unit for point coordinates"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": ["points"]
             }
@@ -330,7 +337,8 @@ async def list_tools() -> list[Tool]:
                     "start_x": {"type": "number"}, "start_y": {"type": "number"},
                     "end_x": {"type": "number"}, "end_y": {"type": "number"},
                     "point_x": {"type": "number"}, "point_y": {"type": "number"},
-                    "unit": {"type": "string", "description": "Coordinate unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": ["start_x", "start_y", "end_x", "end_y", "point_x", "point_y"]
             }
@@ -347,7 +355,8 @@ async def list_tools() -> list[Tool]:
                     "y2": {"type": "number", "description": "Second arc center Y"},
                     "width": {"type": "number", "exclusiveMinimum": 0,
                               "description": "Slot width"},
-                    "unit": {"type": "string", "description": "Coordinate and width unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": ["x1", "y1", "x2", "y2", "width"]
             }
@@ -362,7 +371,8 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "depth": {"type": "number", "default": 10, "description": "Extrusion depth"},
                     "both_directions": {"type": "boolean", "default": False, "description": "Extrude in both directions"},
-                    "unit": {"type": "string", "description": "Unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -377,7 +387,8 @@ async def list_tools() -> list[Tool]:
                     "through_all": {"type": "boolean", "default": False, "description": "Cut through all"},
                     "both_directions": {"type": "boolean", "default": False, "description": "Cut both directions"},
                     "flip_direction": {"type": "boolean", "description": "Explicit cut direction; omit to retry the opposite direction automatically"},
-                    "unit": {"type": "string", "description": "Unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -406,7 +417,8 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "radius": {"type": "number", "default": 2, "description": "Fillet radius"},
                     "edge_points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "description": "Points [x, y, z] (in unit) lying on the edges to treat; omit to use the current selection"},
-                    "unit": {"type": "string", "description": "Unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
@@ -420,7 +432,8 @@ async def list_tools() -> list[Tool]:
                     "distance": {"type": "number", "default": 2, "description": "Chamfer distance"},
                     "angle": {"type": "number", "default": 45, "description": "Chamfer angle (degrees)"},
                     "edge_points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}, "description": "Points [x, y, z] (in unit) lying on the edges to treat; omit to use the current selection"},
-                    "unit": {"type": "string", "description": "Unit"}
+                    "unit": {"type": "string", "enum": ["mm", "cm", "m", "inch"],
+                         "description": "Unit; omitted = session default (set_units)"}
                 },
                 "required": []
             }
