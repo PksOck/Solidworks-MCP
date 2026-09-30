@@ -64,6 +64,8 @@ class SolidWorksConfig:
     guarded_mode: bool = False
     output_roots: list[str] = field(default_factory=list)
     protected_roots: list[str] = field(default_factory=list)
+    # Advertised tool groups; None = all. "core" is always enabled.
+    enabled_toolsets: Optional[list[str]] = None
     
     def __post_init__(self):
         """Validate configuration after initialization"""

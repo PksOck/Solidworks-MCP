@@ -42,6 +42,7 @@ from .core.policy import OperationClass
 from .core.contracts import OperationError, OperationResult, OperationStatus
 from .core.evidence import OperationJournal
 from .core.session import TargetMismatchError
+from . import catalog
 from .registry import registered_tools, dispatch, operation_class_for
 from .knowledge import library as modeling_guidance
 from .utils import get_solidworks_info, set_default_unit
@@ -109,10 +110,9 @@ def _execute_python_tool() -> Tool:
 # Tool Definitions
 # ============================================================================
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List all available SolidWorks tools"""
-    tools = [
+def _legacy_tools() -> list[Tool]:
+    """Tools still defined inline in this module (moved to tools/ by plan B)."""
+    return [
         Tool(
             name="get_modeling_guide",
             description=(
@@ -472,8 +472,13 @@ async def list_tools() -> list[Tool]:
                 "required": ["unit"]
             }
         ),
-    ] + ([] if config.guarded_mode else [_execute_python_tool()]) + registered_tools()
-    return tools
+    ] + [_execute_python_tool()]
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    """List advertised SolidWorks tools"""
+    return catalog.advertised_tools(_legacy_tools())
 
 
 # ============================================================================
@@ -489,15 +494,15 @@ async def list_modeling_resources() -> list[Resource]:
             for entry in entries]
 
 
-async def _modeling_guide_payload(topic: str) -> dict:
-    advertised = {tool.name for tool in await list_tools()}
+def _modeling_guide_payload(topic: str) -> dict:
+    advertised = {tool.name for tool in catalog.advertised_tools(_legacy_tools())}
     return modeling_guidance.read_topic(topic, advertised)
 
 
 @server.read_resource()
 async def read_modeling_resource(uri) -> list[ReadResourceContents]:
     topic = modeling_guidance.topic_for_uri(str(uri))
-    payload = await _modeling_guide_payload(topic)
+    payload = _modeling_guide_payload(topic)
     return [ReadResourceContents(content=json.dumps(payload, ensure_ascii=False),
                                  mime_type="application/json")]
 
@@ -604,7 +609,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
 
         elif name == "get_modeling_guide":
             try:
-                payload = await _modeling_guide_payload(arguments.get("topic", "index"))
+                payload = _modeling_guide_payload(arguments.get("topic", "index"))
                 result = sw_automation._result(True, "Modeling guide loaded; no CAD operations executed.",
                                                SwErrors.swSuccess, payload)
             except ValueError as error:
@@ -653,6 +658,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                     "guarded_mode": config.guarded_mode,
                     "solidworks_build": sw_build,
                     "advertised_tools": advertised,
+                    "toolsets": {"enabled": catalog.enabled_toolsets(),
+                                 "available": sorted(catalog.TOOLSETS)},
                     "blocked_capabilities": blocked,
                     "modeling_guidance": {"tool": "get_modeling_guide", "topic": "index",
                                           "resource": "solidworks://guides/index"},

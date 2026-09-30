@@ -18,3 +18,4 @@ engineering package (batch changes, health, drawings, results) read
 workflow/engineering-package. Give final absolute file paths.
 Every tool also accepts an optional operation_id string: repeating a call with the
 same operation_id returns the recorded result and never runs the operation twice.
+The server may advertise only some toolsets; get_capabilities lists the enabled ones.
