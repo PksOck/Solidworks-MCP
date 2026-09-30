@@ -503,27 +503,27 @@ async def read_modeling_resource(uri) -> list[ReadResourceContents]:
 
 
 def format_result(r: Dict) -> str:
-    """Format result dictionary as readable text"""
+    """Format a result as compact text: status line, Details JSON, Operation JSON."""
     status = "SUCCESS" if r["success"] else "ERROR"
     lines = [f"[{status}] {r['message']}"]
-    
+
     if not r["success"]:
         lines.append(f"Error Code: {r['error_code']} ({r['error_name']})")
-    
+
     if r.get("data"):
-        lines.append("Details: " + json.dumps(r["data"], indent=2))
+        lines.append("Details: " + json.dumps(r["data"], ensure_ascii=False))
 
     if r.get("schema_version"):
-        lines.append("Operation: " + json.dumps({
-            "schema_version": r["schema_version"],
-            "operation_id": r["operation_id"],
-            "status": r["status"],
-            "target_before": r.get("target_before"),
-            "target_after": r.get("target_after"),
-            "warnings": r.get("warnings", []),
-            "errors": r.get("errors", []),
-        }, indent=2))
-    
+        operation = {"operation_id": r["operation_id"], "status": r["status"]}
+        if r.get("target_before") is not None:
+            operation["target_before"] = r["target_before"]
+        if r.get("target_after") is not None and r.get("target_after") != r.get("target_before"):
+            operation["target_after"] = r["target_after"]
+        for key in ("warnings", "errors"):
+            if r.get(key):
+                operation[key] = r[key]
+        lines.append("Operation: " + json.dumps(operation, ensure_ascii=False))
+
     return "\n".join(lines)
 
 
