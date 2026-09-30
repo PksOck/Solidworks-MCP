@@ -12,6 +12,7 @@ import win32com.client
 from ..comutil import com, set_com
 from ..constants import SwDocumentTypes, SwErrors, SwMateTypes
 from ..core.policy import OperationClass
+from ..core.progress import report_progress
 from ..registry import tool
 from .guard import require_output_write
 
@@ -521,6 +522,8 @@ def list_components(sw, depth: int = 32, mode: str = "detailed") -> dict:
                 "lightweight": suppression in {1, 3} if suppression is not None else None,
                 "virtual": bool(virtual) if virtual is not None else None,
             })
+
+        report_progress(len(comps), None, instance_path)
 
         if fast and is_subassembly is False:
             return

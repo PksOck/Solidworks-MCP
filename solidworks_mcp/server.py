@@ -16,6 +16,7 @@ Fixes v4.0.0:
 - NEW: get_sketch_status tool for diagnostics
 """
 
+import asyncio
 import json
 import base64
 import hashlib
@@ -38,6 +39,7 @@ from .constants import SwErrors
 from .config import get_config
 from .core.contracts import OperationError, OperationResult, OperationStatus
 from .core.evidence import OperationJournal
+from .core.progress import progress_scope
 from . import catalog
 from .com_worker import run_com
 from .registry import execute
@@ -212,6 +214,33 @@ def _record_exception(operation_id: str, error: Exception) -> Dict:
     return payload
 
 
+def _progress_reporter():
+    """Reporter for this request, or None when the client sent no progress token."""
+    try:
+        context = server.request_context
+    except LookupError:
+        return None
+    token = getattr(context.meta, "progressToken", None) if context.meta is not None else None
+    if token is None:
+        return None
+    loop = asyncio.get_running_loop()
+
+    def send(progress, total, message):
+        asyncio.run_coroutine_threadsafe(
+            context.session.send_progress_notification(
+                token, progress, total=total, message=message,
+                related_request_id=context.request_id),
+            loop,
+        )
+    return send
+
+
+def _run_tool(reporter, name: str, sw, arguments: Dict):
+    """Runs on the COM thread."""
+    with progress_scope(reporter):
+        return execute(name, sw, arguments)
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
     """Handle MCP tool calls: replay, execute once, record."""
@@ -223,7 +252,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
     operation_journal.mark_running(operation_id)
     logger.info(f"Tool: {name}, Args: {arguments}")
     try:
-        execution = await run_com(execute, name, sw_automation, arguments)
+        execution = await run_com(_run_tool, _progress_reporter(), name, sw_automation, arguments)
         payload = _record(operation_id, execution)
     except Exception as error:
         logger.error(f"Tool error: {error}\n{traceback.format_exc()}")
