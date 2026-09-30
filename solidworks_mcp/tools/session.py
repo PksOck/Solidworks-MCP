@@ -14,6 +14,7 @@ from ..constants import SwErrors
 from ..core.policy import OperationClass, WriteDeniedError
 from ..core.session import DocumentSession
 from ..registry import tool
+from ..session_monitor import monitor
 
 GPU_RESTART_THRESHOLD_MB = 4096
 _SYNCHRONIZE = 0x00100000
@@ -67,6 +68,7 @@ def session_health(sw):
         "gpu_restart_threshold_mb": GPU_RESTART_THRESHOLD_MB,
         "open_documents": len(documents) if documents is not None else None,
         "restart_recommended": gpu_mb is not None and gpu_mb >= GPU_RESTART_THRESHOLD_MB,
+        "counters": monitor.snapshot(),
     }
     if health["restart_recommended"]:
         health["hint"] = ("SolidWorks keeps the graphics memory of closed documents until it "

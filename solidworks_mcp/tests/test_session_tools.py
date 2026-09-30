@@ -59,6 +59,17 @@ class SessionHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual({"connected": False}, session_health(Automation(root, [], False)))
 
+    def test_connected_session_reports_monitor_counters(self):
+        from solidworks_mcp.session_monitor import monitor
+
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(session, "dedicated_gpu_mb", return_value=100.0),                     mock.patch.object(monitor, "snapshot",
+                                      return_value={"documents_opened": 5,
+                                                    "documents_closed": 4,
+                                                    "gpu_dedicated_mb": 100.0}):
+                health = session_health(Automation(root, []))
+        self.assertEqual(4, health["counters"]["documents_closed"])
+
     def test_high_gpu_memory_recommends_restart(self):
         with tempfile.TemporaryDirectory() as root:
             sw = Automation(root, [{"title": "Part1", "path": ""}])
