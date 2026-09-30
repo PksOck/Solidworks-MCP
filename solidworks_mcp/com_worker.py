@@ -22,6 +22,11 @@ _executor = ThreadPoolExecutor(
 )
 
 
+async def run_beside_com(fn, *args):
+    """Run fn(*args) in a worker thread, for tools that never touch COM."""
+    return await asyncio.to_thread(fn, *args)
+
+
 async def run_com(fn, *args):
     """Run fn(*args) on the COM thread and await its result."""
     return await asyncio.get_running_loop().run_in_executor(_executor, fn, *args)

@@ -13,7 +13,6 @@ from ..core.policy import OperationClass
 from ..knowledge import library as modeling_guidance
 from ..registry import tool
 from ..utils import get_solidworks_info, set_default_unit
-from .session import session_health
 
 logger = logging.getLogger("SolidWorksMCP")
 
@@ -30,6 +29,7 @@ logger = logging.getLogger("SolidWorksMCP")
                   "description": "Exact topic ID from index, e.g. workflow/part, workflow/weldment, expert."}
     }, "additionalProperties": False},
     operation_class=OperationClass.READ,
+    com=False,
 )
 def get_modeling_guide(sw, topic="index"):
     from .. import catalog
@@ -62,6 +62,8 @@ def connect_solidworks(sw):
     operation_class=OperationClass.READ,
 )
 def solidworks_info(sw):
+    from .session import session_health  # lazy: session registers a tool, and connection tools must list first
+
     info = get_solidworks_info()
     info["session"] = session_health(sw)
     return {
