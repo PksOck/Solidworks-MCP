@@ -52,6 +52,7 @@ def _safe_filename(title: str, extension: str) -> str:
                                      "instead of replaced."},
     }, "required": []},
     operation_class=OperationClass.MUTATE,
+    postflight="save",
 )
 def save_document(sw, path: str = None, subfolder: str = DEFAULT_SUBFOLDER,
                   overwrite: bool = True) -> dict:

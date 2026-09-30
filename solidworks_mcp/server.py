@@ -43,7 +43,7 @@ from .core.contracts import OperationError, OperationResult, OperationStatus
 from .core.evidence import OperationJournal
 from .core.session import TargetMismatchError
 from . import catalog
-from .registry import registered_tools, dispatch, operation_class_for
+from .registry import execute
 from .knowledge import library as modeling_guidance
 from .utils import get_solidworks_info, set_default_unit
 from .tools.session import session_health
@@ -70,7 +70,6 @@ _operation_payloads: Dict[str, Dict] = {}
 
 _LEGACY_OPERATION_CLASSES = {
     "get_modeling_guide": OperationClass.READ,
-    "save_document": OperationClass.MUTATE,
     "close_document": OperationClass.MUTATE,
     "create_sketch": OperationClass.MUTATE,
     "create_sketch_on_face": OperationClass.MUTATE,
@@ -580,7 +579,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         operation_journal.mark_running(operation_id)
         logger.info(f"Tool: {name}, Args: {arguments}")
 
-        operation_class = _LEGACY_OPERATION_CLASSES.get(name) or operation_class_for(name)
+        operation_class = _LEGACY_OPERATION_CLASSES.get(name)
+        execution = None
         target_before = None
         guard_error = None
         if operation_class in {
@@ -844,31 +844,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                     result = _execute_python_fixed(code)
         
         else:
-            result = dispatch(name, sw_automation, arguments, preflight=False)
-            if result is None:
-                result = sw_automation._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError)
+            execution = execute(name, sw_automation, arguments)
+            result = execution.result
+            target_before = execution.target_before
 
-        target_after = target_before
-        if result.get("success"):
-            if name in {"create_new_part", "create_new_assembly", "open_document"}:
-                target_after = sw_automation.bind_active_document()
-            elif name == "bind_active_document":
-                target_after = document
-            elif name == "save_document" and target_before is not None:
-                saved_ref, error = sw_automation.capture_active_document_ref()
-                if error:
-                    raise RuntimeError(error["message"])
-                if saved_ref.document_id != target_before.document_id or saved_ref.path != target_before.path:
+        if execution is not None:
+            target_after = execution.target_after
+        else:
+            target_after = target_before
+            if result.get("success"):
+                if name in {"create_new_part", "create_new_assembly", "open_document"}:
                     target_after = sw_automation.bind_active_document()
-                else:
+                elif name == "bind_active_document":
+                    target_after = document
+                elif (
+                    target_before is not None
+                    and operation_class is OperationClass.MUTATE
+                    and name != "close_document"
+                    and hasattr(sw_automation, "mark_active_document_mutated")
+                ):
                     target_after = sw_automation.mark_active_document_mutated(target_before)
-            elif (
-                target_before is not None
-                and operation_class is OperationClass.MUTATE
-                and name != "close_document"
-                and hasattr(sw_automation, "mark_active_document_mutated")
-            ):
-                target_after = sw_automation.mark_active_document_mutated(target_before)
 
         if result.get("success"):
             operation_result = OperationResult(

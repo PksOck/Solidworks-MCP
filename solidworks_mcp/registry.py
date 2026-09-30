@@ -1,13 +1,13 @@
 """
-Tool registry for SolidWorks MCP server extensions.
+Tool registry for the SolidWorks MCP server.
 
-Lets new tools be added by writing a single decorated function in
-solidworks_mcp/tools/, without editing server.py. The 25 original tools stay
-in server.py and are not affected.
+Every tool is a decorated function in solidworks_mcp/tools/. execute() applies
+the shared document guard and postflight, so the server only records results.
 """
 
 import logging
-from typing import Callable, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
 from mcp.types import Tool
 
@@ -20,12 +20,20 @@ logger = logging.getLogger("SolidWorksMCP")
 _TOOLS: Dict[str, Dict] = {}
 _loaded = False
 
+_POSTFLIGHTS = {None, "bind", "bound", "save", "none"}
+_GUARDED_CLASSES = frozenset({
+    OperationClass.STATEFUL_READ,
+    OperationClass.MUTATE,
+    OperationClass.EXPORT,
+})
+
 
 def tool(
     name: str,
     description: str,
     schema: Dict,
     operation_class: OperationClass,
+    postflight: Optional[str] = None,
 ) -> Callable:
     """
     Register a function as an MCP tool.
@@ -38,10 +46,17 @@ def tool(
         name: Tool name, snake_case
         description: One sentence: what it does and what it acts on
         schema: JSON schema for the tool input
+        operation_class: Execution semantics; guarded classes bind the document first
+        postflight: Target after success: None = mark a mutation, "bind" = bind the
+            new active document, "bound" = report the bound document, "save" = rebind
+            when Save As changed the identity, "none" = keep the target unchanged
 
     Returns:
         Decorator that registers the function
     """
+    if postflight not in _POSTFLIGHTS:
+        raise ValueError(f"Unknown postflight for {name}: {postflight}")
+
     def decorator(fn: Callable) -> Callable:
         if name in _TOOLS:
             raise ValueError(f"Tool already registered: {name}")
@@ -49,6 +64,7 @@ def tool(
             "tool": Tool(name=name, description=description, inputSchema=schema),
             "handler": fn,
             "operation_class": operation_class,
+            "postflight": postflight,
         }
         return fn
     return decorator
@@ -87,30 +103,22 @@ def tool_module_for(name: str) -> str | None:
     return entry["handler"].__module__ if entry is not None else None
 
 
-def dispatch(name: str, sw, arguments: Dict, *, preflight: bool = True) -> Optional[Dict]:
-    """
-    Run a registered tool.
+@dataclass(frozen=True)
+class Execution:
+    """A tool result with the document targets before and after it ran."""
+    result: Dict
+    target_before: Any = None
+    target_after: Any = None
 
-    Args:
-        name: Tool name
-        sw: SolidWorksAutomation instance
-        arguments: Tool arguments
 
-    Returns:
-        Result dictionary, or None if no tool with that name is registered
-    """
+def execute(name: str, sw, arguments: Dict) -> Execution:
+    """Run a registered tool with its document guard and postflight."""
     _load()
     entry = _TOOLS.get(name)
     if entry is None:
-        return None
-    operation_class = entry["operation_class"]
-    guarded_classes = {
-        OperationClass.STATEFUL_READ,
-        OperationClass.MUTATE,
-        OperationClass.EXPORT,
-    }
+        return Execution(sw._result(False, f"Unknown tool: {name}", SwErrors.swUnknownError))
     before = None
-    if preflight and operation_class in guarded_classes and hasattr(sw, "bind_active_document"):
+    if entry["operation_class"] in _GUARDED_CLASSES and hasattr(sw, "bind_active_document"):
         try:
             if hasattr(sw, "has_bound_document") and sw.has_bound_document():
                 before = sw.require_bound_active_document()
@@ -118,21 +126,45 @@ def dispatch(name: str, sw, arguments: Dict, *, preflight: bool = True) -> Optio
                 before = sw.bind_active_document()
         except TargetMismatchError as error:
             detail = error.operation_error
-            return sw._result(
+            return Execution(sw._result(
                 False,
                 str(error),
                 SwErrors.swInvalidInput,
                 {"code": detail.code, "retryable": detail.retryable},
-            )
+            ))
     result = entry["handler"](sw, **arguments)
     if result is None:
         raise ValueError(f"Tool returned no result: {name}")
+    after = _postflight(entry, sw, before) if result.get("success") else before
+    return Execution(result, before, after)
+
+
+def _postflight(entry: Dict, sw, before):
+    mode = entry["postflight"]
+    if mode == "bind":
+        return sw.bind_active_document()
+    if mode == "bound":
+        return sw.require_bound_active_document()
+    if mode == "save" and before is not None:
+        saved, error = sw.capture_active_document_ref()
+        if error:
+            raise RuntimeError(error["message"])
+        if saved.document_id != before.document_id or saved.path != before.path:
+            return sw.bind_active_document()
+        return sw.mark_active_document_mutated(before)
     if (
-        before is not None
-        and preflight
-        and operation_class is OperationClass.MUTATE
-        and result.get("success")
+        mode is None
+        and before is not None
+        and entry["operation_class"] is OperationClass.MUTATE
         and hasattr(sw, "mark_active_document_mutated")
     ):
-        sw.mark_active_document_mutated(before)
-    return result
+        return sw.mark_active_document_mutated(before)
+    return before
+
+
+def dispatch(name: str, sw, arguments: Dict) -> Optional[Dict]:
+    """Run a registered tool; returns its result, or None if the name is unknown."""
+    _load()
+    if name not in _TOOLS:
+        return None
+    return execute(name, sw, arguments).result
