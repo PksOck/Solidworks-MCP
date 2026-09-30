@@ -9,6 +9,8 @@ to the handler default.
 import difflib
 from typing import Dict
 
+from jsonschema.exceptions import best_match
+
 
 class ArgumentError(ValueError):
     """An argument does not match the tool schema."""
@@ -43,10 +45,9 @@ def validate_arguments(schema: Dict, validator, arguments: Dict) -> Dict:
             hint = (f"Did you mean '{guess}'?" if guess
                     else f"Valid arguments: {', '.join(sorted(properties))}.")
             raise ArgumentError(key, f"Unknown argument '{key}'. {hint}")
-    errors = sorted(validator.iter_errors(cleaned), key=lambda error: list(error.absolute_path))
-    if not errors:
+    error = best_match(sorted(validator.iter_errors(cleaned), key=lambda error: list(error.absolute_path)))
+    if error is None:
         return cleaned
-    error = errors[0]
     parts = list(error.absolute_path)
     if error.validator == "required":
         missing = error.message.split("'")[1]

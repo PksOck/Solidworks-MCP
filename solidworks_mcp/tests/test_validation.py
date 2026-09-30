@@ -55,6 +55,14 @@ class ValidateArgumentsTests(unittest.TestCase):
         self.assertEqual("points[1][1]", caught.exception.argument)
         self.assertTrue(str(caught.exception).startswith("Invalid argument 'points[1][1]':"))
 
+    def test_any_of_reports_the_most_relevant_branch(self):
+        schema = {"type": "object", "properties": {
+            "size": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "string", "enum": ["auto"]}]}}}
+        with self.assertRaises(ArgumentError) as caught:
+            check({"size": 0}, schema)
+        self.assertEqual("size", caught.exception.argument)
+        self.assertNotIn("is not valid under any of the given schemas", str(caught.exception))
+
     def test_enum_suggests_the_closest_value(self):
         with self.assertRaises(ArgumentError) as caught:
             check({"file_path": "a", "unit": "inches"})
