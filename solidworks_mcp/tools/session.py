@@ -165,3 +165,44 @@ def restart_solidworks(sw, confirm=False, exit_timeout_s=60):
                           SwErrors.swConnectionError, {"closed": closing, "before": before})
     return sw._result(True, "SolidWorks restarted.", SwErrors.swSuccess,
                       {"closed": closing, "before": before, "after": session_health(sw)})
+
+
+@tool(
+    name="close_saved_outputs",
+    description=(
+        "Close open documents that are saved, unmodified and inside the approved "
+        "output roots, to slow graphics memory growth in a long session. Never "
+        "closes unsaved, modified or user documents. Lists only unless confirm=true."
+    ),
+    schema={
+        "type": "object",
+        "properties": {
+            "confirm": {"type": "boolean", "default": False,
+                        "description": "True to close; false only lists."},
+        },
+        "additionalProperties": False,
+    },
+    operation_class=OperationClass.SESSION,
+)
+def close_saved_outputs(sw, confirm=False):
+    if not sw.is_connected:
+        return sw._result(False, "Not connected to SolidWorks.", SwErrors.swConnectionError)
+    listed = sw.list_open_documents()
+    if not listed["success"] or not listed["data"].get("complete"):
+        return sw._result(False, "Open documents could not be listed completely; nothing closed.",
+                          SwErrors.swInvalidInput, listed.get("data"))
+    documents = listed["data"]["documents"]
+    kept = _restart_blockers(sw, documents)
+    kept_titles = {item["title"] for item in kept}
+    closable = [document for document in documents if document.get("title") not in kept_titles]
+    if not confirm:
+        return sw._result(True, f"{len(closable)} saved output document(s) can be closed.",
+                          SwErrors.swSuccess,
+                          {"would_close": [{"title": d["title"], "path": d["path"]} for d in closable],
+                           "kept": kept})
+    for document in closable:
+        com(sw.app, "CloseDoc", document["path"])
+    return sw._result(True, f"Closed {len(closable)} saved output document(s). "
+                      "Rebind the target document before the next change.",
+                      SwErrors.swSuccess,
+                      {"closed": [document["title"] for document in closable], "kept": kept})

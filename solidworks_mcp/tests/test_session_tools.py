@@ -6,18 +6,22 @@ from unittest import mock
 from solidworks_mcp.core.policy import OperationClass, PathPolicy
 from solidworks_mcp.registry import operation_class_for, registered_tools
 from solidworks_mcp.tools import session
-from solidworks_mcp.tools.session import restart_solidworks, session_health
+from solidworks_mcp.tools.session import close_saved_outputs, restart_solidworks, session_health
 
 
 class App:
     def __init__(self):
         self.exit_calls = 0
+        self.closed = []
 
     def GetProcessID(self):
         return 4242
 
     def ExitApp(self):
         self.exit_calls += 1
+
+    def CloseDoc(self, name):
+        self.closed.append(name)
 
 
 class Automation:
@@ -146,6 +150,49 @@ class RestartTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             result = restart_solidworks(Automation(root, [], False), confirm=True)
         self.assertFalse(result["success"])
+
+
+class CloseSavedOutputsTests(unittest.TestCase):
+    def _documents(self, root, other):
+        return [
+            {"title": "Part1", "path": "", "unsaved_changes": True},
+            {"title": "out.SLDPRT", "path": str(Path(root) / "out.SLDPRT"), "unsaved_changes": False},
+            {"title": "user.SLDASM", "path": str(Path(other) / "user.SLDASM"),
+             "unsaved_changes": False},
+        ]
+
+    def test_registered_as_session_operation(self):
+        self.assertIs(OperationClass.SESSION, operation_class_for("close_saved_outputs"))
+
+    def test_without_confirm_only_lists(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as other:
+            sw = Automation(root, self._documents(root, other))
+            result = close_saved_outputs(sw)
+        self.assertTrue(result["success"])
+        self.assertEqual(["out.SLDPRT"], [item["title"] for item in result["data"]["would_close"]])
+        self.assertEqual(2, len(result["data"]["kept"]))
+        self.assertEqual([], sw.app.closed)
+
+    def test_confirm_closes_only_saved_outputs(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as other:
+            sw = Automation(root, self._documents(root, other))
+            result = close_saved_outputs(sw, confirm=True)
+            expected = str(Path(root) / "out.SLDPRT")
+        self.assertTrue(result["success"])
+        self.assertEqual([expected], sw.app.closed)
+        self.assertEqual(["out.SLDPRT"], result["data"]["closed"])
+
+    def test_incomplete_listing_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            sw = Automation(root, [])
+            sw.list_open_documents = lambda: {"success": True, "message": "",
+                                              "data": {"documents": [], "complete": False}}
+            result = close_saved_outputs(sw, confirm=True)
+        self.assertFalse(result["success"])
+
+    def test_not_connected_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertFalse(close_saved_outputs(Automation(root, [], False))["success"])
 
 
 if __name__ == "__main__":

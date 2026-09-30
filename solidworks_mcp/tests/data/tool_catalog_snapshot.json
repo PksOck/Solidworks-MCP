@@ -629,6 +629,20 @@
    "type": "object"
   }
  },
+ "close_saved_outputs": {
+  "description": "Close open documents that are saved, unmodified and inside the approved output roots, to slow graphics memory growth in a long session. Never closes unsaved, modified or user documents. Lists only unless confirm=true.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "confirm": {
+     "default": false,
+     "description": "True to close; false only lists.",
+     "type": "boolean"
+    }
+   },
+   "type": "object"
+  }
+ },
  "close_sketch": {
   "description": "Close/exit the active sketch. Call this before extrude if sketch is still open.",
   "inputSchema": {
