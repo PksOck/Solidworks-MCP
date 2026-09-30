@@ -20,6 +20,9 @@ pred risanjem in uporabniku omogočiti razumljive spremembe po njem.
    Izberi stabilne referenčne ravnine, glavne skice in poimenovane parametre,
    kjer jih razpoložljiva orodja podpirajo. Parametrizacija mora ohraniti
    namen konstrukcije pri spremembi, ne samo prvotnega videza.
+5. Geometrijske mere spreminjaj samo prek podprtih orodij za mere/enačbe.
+   Uporabniška lastnost (custom property) ne spremeni geometrije in ni
+   nadomestek za spremembo mere.
 
 ## Obrazec prilagodi nalogi
 

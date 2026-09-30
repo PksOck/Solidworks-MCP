@@ -25,6 +25,10 @@ argument `edit_original=true` ne obide zaščitenih poti strežnika.
    ročno domnevane poti s starim imenom; kopija ima drugačno ime. Osveži
    `list_components` in `list_model_parameters`.
 
+Shrani kot (Save As) na sestavu ni neodvisen projekt: kopija sestava še vedno
+kaže na izvirne dele. Neodvisen projekt nastane samo s `copy_project` in
+preverjenim manifestom.
+
 ## Spreminjanje obstoječega dela
 
 `list_model_parameters()` bere dimenzije funkcij in skic ter enačbe/globalne
