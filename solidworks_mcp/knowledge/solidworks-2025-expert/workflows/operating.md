@@ -62,6 +62,7 @@ Kjer orodje sprejme ime, uporabi ime; nikoli si ga ne izmišljuj. Ime ravnine
 | Simptom | Verjeten vzrok | Ukrep |
 |---|---|---|
 | `TargetMismatchError` | aktivni dokument se je zamenjal | ponovno stanje, nato bind |
+| `VALIDATION_FAILED` | argument ne ustreza shemi | preberi `data.argument` in namig; popravi ime ali vrednost, ne ponavljaj enakega klica |
 | mutacija se tiho ne zgodi | skica ni zaprta | `get_sketch_status` → `close_sketch` |
 | "success" brez vidne spremembe | API ni ustvaril učinka ali je učinek zanemarljiv | preveri volumen/telesa; sicer "ni potrjeno" |
 | napačna ploskev | zastarel indeks | ponovno naštej |
