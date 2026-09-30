@@ -30,5 +30,12 @@ class CatalogSnapshotTests(unittest.TestCase):
                                          "inputSchema": tools[name].inputSchema})
 
 
+    def test_connection_tools_are_listed_first(self):
+        with mock.patch.object(server.config, "guarded_mode", False):
+            names = [t.name for t in asyncio.run(server.list_tools())]
+        self.assertEqual(
+            ["get_modeling_guide", "connect_solidworks", "get_solidworks_info", "get_capabilities"],
+            names[:4])
+
 if __name__ == "__main__":
     unittest.main()
