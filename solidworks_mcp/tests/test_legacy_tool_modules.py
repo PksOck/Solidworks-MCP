@@ -31,6 +31,13 @@ class MovedToolTests(unittest.TestCase):
         expected["get_sketch_status"] = (READ, None)
         self.assertMoved("sketch_basic", expected)
 
+    def test_documents(self):
+        self.assertMoved("documents", {
+            "create_new_part": (SESSION, "bind"), "create_new_assembly": (SESSION, "bind"),
+            "open_document": (SESSION, "bind"), "close_document": (MUTATE, "none"),
+            "get_document_info": (READ, None), "list_open_documents": (READ, None),
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

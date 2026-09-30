@@ -69,7 +69,6 @@ _operation_payloads: Dict[str, Dict] = {}
 
 _LEGACY_OPERATION_CLASSES = {
     "get_modeling_guide": OperationClass.READ,
-    "close_document": OperationClass.MUTATE,
     "execute_python": OperationClass.RAW_EXECUTION,
 }
 
@@ -132,50 +131,6 @@ def _legacy_tools() -> list[Tool]:
                 "Explicitly bind the current SolidWorks ActiveDoc and configuration "
                 "as the target for subsequent mutating operations."
             ),
-            inputSchema={"type": "object", "properties": {}, "required": []}
-        ),
-        
-        # Document Tools
-        Tool(
-            name="create_new_part",
-            description="Create a new part document.",
-            inputSchema={"type": "object", "properties": {}, "required": []}
-        ),
-        Tool(
-            name="create_new_assembly",
-            description="Create a new assembly document.",
-            inputSchema={"type": "object", "properties": {}, "required": []}
-        ),
-        Tool(
-            name="open_document",
-            description="Open an existing SolidWorks document.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "Path to file"}
-                },
-                "required": ["filepath"]
-            }
-        ),
-        Tool(
-            name="close_document",
-            description="Close the active document.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "save": {"type": "boolean", "default": False, "description": "Save before closing"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="get_document_info",
-            description="Get information about the active document.",
-            inputSchema={"type": "object", "properties": {}, "required": []}
-        ),
-        Tool(
-            name="list_open_documents",
-            description="List all open documents.",
             inputSchema={"type": "object", "properties": {}, "required": []}
         ),
         
@@ -399,25 +354,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
                 document.to_dict(),
             )
         
-        # Document Tools
-        elif name == "create_new_part":
-            result = sw_automation.create_new_part()
-        
-        elif name == "create_new_assembly":
-            result = sw_automation.create_new_assembly()
-        
-        elif name == "open_document":
-            result = sw_automation.open_document(arguments.get("filepath", ""))
-        
-        elif name == "close_document":
-            result = sw_automation.close_document(arguments.get("save", False))
-        
-        elif name == "get_document_info":
-            result = sw_automation.get_document_info()
-        
-        elif name == "list_open_documents":
-            result = sw_automation.list_open_documents()
-        
         # Utility Tools
         elif name == "set_units":
             unit = arguments.get("unit", "mm")
@@ -453,14 +389,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         else:
             target_after = target_before
             if result.get("success"):
-                if name in {"create_new_part", "create_new_assembly", "open_document"}:
-                    target_after = sw_automation.bind_active_document()
-                elif name == "bind_active_document":
+                if name == "bind_active_document":
                     target_after = document
                 elif (
                     target_before is not None
                     and operation_class is OperationClass.MUTATE
-                    and name != "close_document"
                     and hasattr(sw_automation, "mark_active_document_mutated")
                 ):
                     target_after = sw_automation.mark_active_document_mutated(target_before)

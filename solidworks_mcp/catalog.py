@@ -38,9 +38,7 @@ _MODULE_TOOLSET = {module: name for name, modules in TOOLSETS.items() for module
 # Tools still defined inline in server.py; removed when they move to tools/ (plan B).
 _LEGACY_TOOLSETS = {
     **dict.fromkeys(("get_modeling_guide", "connect_solidworks", "get_solidworks_info",
-                     "get_capabilities", "bind_active_document", "set_units", "execute_python",
-                     "create_new_part", "create_new_assembly", "open_document", "close_document",
-                     "get_document_info", "list_open_documents"), "core"),
+                     "get_capabilities", "bind_active_document", "set_units", "execute_python"), "core"),
 }
 
 
