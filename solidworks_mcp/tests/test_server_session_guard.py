@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import unittest
 
 from solidworks_mcp import server
@@ -141,6 +142,10 @@ class ServerSessionGuardTests(unittest.TestCase):
             self.assertIn('"document_id": "doc-saved"', result[0].text)
         finally:
             _TOOLS.pop("_test_save_as_rebind", None)
+
+    def test_call_tool_stays_small(self):
+        lines = inspect.getsource(server.call_tool).splitlines()
+        self.assertLess(len(lines), 60)
 
 
 if __name__ == "__main__":

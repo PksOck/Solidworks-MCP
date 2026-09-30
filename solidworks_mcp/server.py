@@ -145,75 +145,82 @@ def _content_for_result(result: Dict) -> list[TextContent | ImageContent]:
 # Tool Handlers
 # ============================================================================
 
+def _replay_payload(operation_id: str, replay: OperationResult) -> Dict:
+    payload = _operation_payloads.get(operation_id)
+    if payload is not None:
+        return payload
+    return replay.to_dict(legacy={
+        "success": replay.status is OperationStatus.COMPLETED,
+        "message": "Operation outcome is already recorded.",
+        "error_code": 0 if replay.status is OperationStatus.COMPLETED else 1,
+        "error_name": replay.status.value,
+        "data": dict(replay.data),
+    })
+
+
+def _record(operation_id: str, execution) -> Dict:
+    """Journal one execution and return the payload sent to the client."""
+    result = execution.result
+    detail = dict(result.get("data", {}))
+    if result.get("success"):
+        operation_result = OperationResult(
+            operation_id=operation_id,
+            status=OperationStatus.COMPLETED,
+            target_before=execution.target_before,
+            target_after=execution.target_after,
+            data=detail,
+        )
+    else:
+        operation_result = OperationResult(
+            operation_id=operation_id,
+            status=OperationStatus.FAILED,
+            target_before=execution.target_before,
+            target_after=execution.target_after,
+            data=detail,
+            errors=(OperationError(
+                code=detail.get("code", result.get("error_name", "COM_ERROR")),
+                message=result.get("message", "Operation failed."),
+                retryable=bool(detail.get("retryable", False)),
+            ),),
+        )
+    operation_journal.record(operation_result)
+    payload = operation_result.to_dict(legacy=result)
+    _operation_payloads[operation_id] = payload
+    return payload
+
+
+def _record_exception(operation_id: str, error: Exception) -> Dict:
+    failed = OperationResult.failed(operation_id, None, str(error))
+    operation_journal.record(failed)
+    payload = failed.to_dict(legacy={
+        "success": False,
+        "message": str(error),
+        "error_code": int(SwErrors.swUnknownError),
+        "error_name": SwErrors.swUnknownError.name,
+        "data": {},
+    })
+    _operation_payloads[operation_id] = payload
+    return payload
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
-    """Handle MCP tool calls"""
+    """Handle MCP tool calls: replay, execute once, record."""
+    arguments = dict(arguments or {})
+    operation_id = arguments.pop("operation_id", None) or str(uuid4())
+    replay = operation_journal.reserve(operation_id)
+    if replay is not None:
+        return _content_for_result(_replay_payload(operation_id, replay))
+    operation_journal.mark_running(operation_id)
+    logger.info(f"Tool: {name}, Args: {arguments}")
     try:
-        arguments = dict(arguments or {})
-        operation_id = arguments.pop("operation_id", None) or str(uuid4())
-        replay = operation_journal.reserve(operation_id)
-        if replay is not None:
-            payload = _operation_payloads.get(operation_id)
-            if payload is None:
-                payload = replay.to_dict(legacy={
-                    "success": replay.status is OperationStatus.COMPLETED,
-                    "message": "Operation outcome is already recorded.",
-                    "error_code": 0 if replay.status is OperationStatus.COMPLETED else 1,
-                    "error_name": replay.status.value,
-                    "data": dict(replay.data),
-                })
-            return _content_for_result(payload)
-        operation_journal.mark_running(operation_id)
-        logger.info(f"Tool: {name}, Args: {arguments}")
-
-        execution = execute(name, sw_automation, arguments)
-        result = execution.result
-        target_before, target_after = execution.target_before, execution.target_after
-
-        if result.get("success"):
-            operation_result = OperationResult(
-                operation_id=operation_id,
-                status=OperationStatus.COMPLETED,
-                target_before=target_before,
-                target_after=target_after,
-                data=dict(result.get("data", {})),
-            )
-        else:
-            detail = result.get("data", {})
-            operation_result = OperationResult(
-                operation_id=operation_id,
-                status=OperationStatus.FAILED,
-                target_before=target_before,
-                target_after=target_after,
-                data=dict(detail),
-                errors=(OperationError(
-                    code=detail.get("code", result.get("error_name", "COM_ERROR")),
-                    message=result.get("message", "Operation failed."),
-                    retryable=bool(detail.get("retryable", False)),
-                ),),
-            )
-        operation_journal.record(operation_result)
-        result = operation_result.to_dict(legacy=result)
-        _operation_payloads[operation_id] = result
-        
-        logger.info(f"Result: success={result['success']}")
-        return _content_for_result(result)
-        
-    except Exception as e:
-        logger.error(f"Tool error: {e}\n{traceback.format_exc()}")
-        if "operation_id" in locals():
-            failed = OperationResult.failed(operation_id, None, str(e))
-            operation_journal.record(failed)
-            payload = failed.to_dict(legacy={
-                "success": False,
-                "message": str(e),
-                "error_code": int(SwErrors.swUnknownError),
-                "error_name": SwErrors.swUnknownError.name,
-                "data": {},
-            })
-            _operation_payloads[operation_id] = payload
-            return [TextContent(type="text", text=format_result(payload))]
-        return [TextContent(type="text", text=f"[ERROR] {e}")]
+        payload = _record(operation_id, execute(name, sw_automation, arguments))
+    except Exception as error:
+        logger.error(f"Tool error: {error}\n{traceback.format_exc()}")
+        payload = _record_exception(operation_id, error)
+        return [TextContent(type="text", text=format_result(payload))]
+    logger.info(f"Result: success={payload['success']}")
+    return _content_for_result(payload)
 
 
 # ============================================================================
