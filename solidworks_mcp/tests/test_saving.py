@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from solidworks_mcp.core.policy import OperationClass, PathPolicy
-from solidworks_mcp.registry import operation_class_for, registered_tools
+from solidworks_mcp.registry import _TOOLS, operation_class_for, registered_tools
 from solidworks_mcp.tools.saving import save_document
 
 
@@ -167,6 +167,10 @@ class SaveDocumentTests(unittest.TestCase):
         self.assertEqual("NO_OUTPUT_ROOT", result["data"]["code"])
         self.assertEqual([], automation.save_calls)
 
+
+    def test_registered_save_document_rebinds_after_save_as(self):
+        registered_tools()
+        self.assertEqual("save", _TOOLS["save_document"]["postflight"])
 
 if __name__ == "__main__":
     unittest.main()

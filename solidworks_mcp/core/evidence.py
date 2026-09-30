@@ -55,6 +55,11 @@ class OperationJournal:
         self._trim()
         return None
 
+    def discard(self, operation_id: str) -> None:
+        """Release an id whose call was rejected before it did anything."""
+        if operation_id not in self._results:
+            self._states.pop(operation_id, None)
+
     def mark_running(self, operation_id: str) -> None:
         if self.get_state(operation_id) is not JournalState.PLANNED:
             raise ValueError("Only a planned operation can transition to running.")

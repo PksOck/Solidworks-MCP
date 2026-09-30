@@ -23,6 +23,7 @@ import hashlib
 import logging
 import traceback
 from collections import OrderedDict
+from dataclasses import replace
 from typing import Dict
 from pathlib import Path
 from uuid import uuid4
@@ -41,8 +42,8 @@ from .core.contracts import OperationError, OperationResult, OperationStatus
 from .core.evidence import OperationJournal
 from .core.progress import progress_scope
 from . import catalog
-from .com_worker import run_com
-from .registry import execute
+from .com_worker import run_beside_com, run_com
+from .registry import execute, needs_com_thread
 from .knowledge import library as modeling_guidance
 
 # Configure logging
@@ -169,8 +170,7 @@ def _replay_payload(operation_id: str, replay: OperationResult) -> Dict:
     })
 
 
-def _record(operation_id: str, execution) -> Dict:
-    """Journal one execution and return the payload sent to the client."""
+def _operation_result(operation_id: str, execution) -> OperationResult:
     result = execution.result
     detail = dict(result.get("data", {}))
     if result.get("success"):
@@ -194,14 +194,32 @@ def _record(operation_id: str, execution) -> Dict:
                 retryable=bool(detail.get("retryable", False)),
             ),),
         )
+    return operation_result
+
+
+def _record(operation_id: str, execution) -> Dict:
+    """Journal one execution and return the payload sent to the client."""
+    operation_result = _operation_result(operation_id, execution)
     operation_journal.record(operation_result)
-    payload = operation_result.to_dict(legacy=result)
+    payload = operation_result.to_dict(legacy=execution.result)
     _remember_payload(operation_id, payload)
     return payload
 
 
+def _is_rejected(execution) -> bool:
+    """A schema-rejected call did nothing, so its id stays free for the corrected retry."""
+    result = execution.result
+    return not result.get("success") and result.get("data", {}).get("code") == "VALIDATION_FAILED"
+
+
+def _reject(operation_id: str, execution) -> Dict:
+    operation_journal.discard(operation_id)
+    return _operation_result(operation_id, execution).to_dict(legacy=execution.result)
+
+
 def _record_exception(operation_id: str, error: Exception) -> Dict:
-    failed = OperationResult.failed(operation_id, None, str(error))
+    failed = replace(OperationResult.failed(operation_id, None, str(error)),
+                     target_before=getattr(error, "target_before", None))
     operation_journal.record(failed)
     payload = failed.to_dict(legacy={
         "success": False,
@@ -241,6 +259,22 @@ def _run_tool(reporter, name: str, sw, arguments: Dict):
         return execute(name, sw, arguments)
 
 
+_background: set = set()
+
+
+async def _execute_and_record(operation_id: str, name: str, reporter, arguments: Dict) -> Dict:
+    """Run one call and journal its outcome, even when the client has stopped waiting."""
+    try:
+        run = run_com if needs_com_thread(name) else run_beside_com
+        execution = await run(_run_tool, reporter, name, sw_automation, arguments)
+        if _is_rejected(execution):
+            return _reject(operation_id, execution)
+        return _record(operation_id, execution)
+    except Exception as error:
+        logger.error(f"Tool error: {error}\n{traceback.format_exc()}")
+        return _record_exception(operation_id, error)
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
     """Handle MCP tool calls: replay, execute once, record."""
@@ -251,13 +285,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         return _content_for_result(_replay_payload(operation_id, replay))
     operation_journal.mark_running(operation_id)
     logger.info(f"Tool: {name}, Args: {arguments}")
-    try:
-        execution = await run_com(_run_tool, _progress_reporter(), name, sw_automation, arguments)
-        payload = _record(operation_id, execution)
-    except Exception as error:
-        logger.error(f"Tool error: {error}\n{traceback.format_exc()}")
-        payload = _record_exception(operation_id, error)
-        return [TextContent(type="text", text=format_result(payload))]
+    work = asyncio.ensure_future(_execute_and_record(operation_id, name, _progress_reporter(), arguments))
+    _background.add(work)
+    work.add_done_callback(_background.discard)
+    # Shielded: a cancelled request must not stop the recording of a call already running on the COM thread.
+    payload = await asyncio.shield(work)
     logger.info(f"Result: success={payload['success']}")
     return _content_for_result(payload)
 

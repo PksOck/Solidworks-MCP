@@ -1,5 +1,7 @@
 import asyncio
 import unittest
+from collections import OrderedDict
+from unittest import mock
 
 from solidworks_mcp import server
 from solidworks_mcp.core.contracts import OperationResult, OperationStatus
@@ -62,6 +64,24 @@ class ServerBoundTests(unittest.TestCase):
         self.assertLessEqual(len(server._operation_payloads), 1000)
         self.assertLessEqual(len(server.operation_journal._states), 1000)
         self.assertTrue(replay[0].text.startswith("[SUCCESS] read"))
+
+    def test_dropped_id_runs_again_and_both_records_drop_the_same_entries(self):
+        calls = []
+        _TOOLS[self.NAME]["handler"] = lambda sw: calls.append(1) or sw._result(True, "read")
+
+        async def scenario():
+            for index in range(1001):
+                await server.call_tool(self.NAME, {"operation_id": f"drop-{index}"})
+            executed = len(calls)
+            await server.call_tool(self.NAME, {"operation_id": "drop-0"})
+            return executed
+
+        with mock.patch.object(server, "operation_journal", OperationJournal()),                 mock.patch.object(server, "_operation_payloads", OrderedDict()):
+            executed = asyncio.run(scenario())
+            self.assertEqual(executed + 1, len(calls))
+            self.assertEqual(set(server.operation_journal._results), set(server._operation_payloads))
+            self.assertNotIn("drop-1", server._operation_payloads)
+            self.assertIn("drop-0", server._operation_payloads)
 
 
 if __name__ == "__main__":

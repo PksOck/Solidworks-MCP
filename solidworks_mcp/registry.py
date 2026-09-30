@@ -36,6 +36,7 @@ def tool(
     schema: Dict,
     operation_class: OperationClass,
     postflight: Optional[str] = None,
+    com: bool = True,
 ) -> Callable:
     """
     Register a function as an MCP tool.
@@ -52,6 +53,7 @@ def tool(
         postflight: Target after success: None = mark a mutation, "bind" = bind the
             new active document, "bound" = report the bound document, "save" = rebind
             when Save As changed the identity, "none" = keep the target unchanged
+        com: False for tools that never touch COM; the server runs them beside a busy COM thread
 
     Returns:
         Decorator that registers the function
@@ -67,6 +69,7 @@ def tool(
             "handler": fn,
             "operation_class": operation_class,
             "postflight": postflight,
+            "com": com,
         }
         return fn
     return decorator
@@ -96,6 +99,13 @@ def operation_class_for(name: str) -> OperationClass | None:
     _load()
     entry = _TOOLS.get(name)
     return entry["operation_class"] if entry is not None else None
+
+
+def needs_com_thread(name: str) -> bool:
+    """False only for registered tools that declared they never touch COM."""
+    _load()
+    entry = _TOOLS.get(name)
+    return entry is None or entry["com"]
 
 
 def tool_module_for(name: str) -> str | None:
@@ -146,10 +156,14 @@ def execute(name: str, sw, arguments: Dict) -> Execution:
                 SwErrors.swInvalidInput,
                 {"code": detail.code, "retryable": detail.retryable},
             ))
-    result = entry["handler"](sw, **arguments)
-    if result is None:
-        raise ValueError(f"Tool returned no result: {name}")
-    after = _postflight(entry, sw, before) if result.get("success") else before
+    try:
+        result = entry["handler"](sw, **arguments)
+        if result is None:
+            raise ValueError(f"Tool returned no result: {name}")
+        after = _postflight(entry, sw, before) if result.get("success") else before
+    except Exception as error:
+        error.target_before = before  # lets the server journal which document the call started on
+        raise
     return Execution(result, before, after)
 
 
