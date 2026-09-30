@@ -140,7 +140,8 @@ class LiveWeldmentGussetTests(ScratchPartTestCase):
         before = self.total_volume_mm3()
         result = create_weldment_gusset(self.automation, face_a, face_b)
         self.assertFalse(result["success"], result)
-        self.assertEqual(before, self.total_volume_mm3())
+        # Volume readback carries floating-point noise near 1e-11 mm^3.
+        self.assertAlmostEqual(before, self.total_volume_mm3(), delta=1e-6)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,8 @@ from solidworks_mcp.tools.advanced_features import (
 from solidworks_mcp.tools.drawing_annotations import auto_balloon, insert_marked_dimensions
 from solidworks_mcp.tools.drawings import add_standard_3_view, insert_cut_list_table, list_drawing_views
 from solidworks_mcp.tools.saving import save_document
+from solidworks_mcp.tests.live._scratch import (close_new_documents,
+                                                open_document_titles)
 from solidworks_mcp.tools.sheetmetal import (
     create_sheet_metal_base_flange, export_flat_pattern,
     flatten_sheet_metal, get_flat_pattern_info, get_sheet_metal_info,
@@ -51,15 +53,17 @@ class LiveDocumentTargetTests(unittest.TestCase):
             self.skipTest(result["message"])
         self.created_titles = []
         self.created_artifacts = []
+        self.baseline_titles = open_document_titles(self.automation)
 
     def tearDown(self):
-        for path in self.created_artifacts:
-            Path(path).unlink(missing_ok=True)
         for title in reversed(self.created_titles):
             try:
                 self.automation.app.CloseDoc(title)
             except Exception:
                 pass
+        close_new_documents(self.automation, self.baseline_titles)
+        for path in self.created_artifacts:
+            Path(path).unlink(missing_ok=True)
         self.automation.disconnect()
 
     def _new_part(self):

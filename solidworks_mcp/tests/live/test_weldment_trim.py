@@ -209,11 +209,15 @@ class LiveWeldmentTrimTests(ScratchPartTestCase):
                 result = trim_weldment_member_to_face(
                     self.automation, target, top, face_index, **kwargs)
                 data = result.get("data") or {}
+                try:
+                    after_z = self._body_zmax_mm(target)
+                except AssertionError:
+                    after_z = "body renamed or consumed"
                 print("VARIANT", variant["label"], "| ok", result["success"],
                       "| proxy", data.get("proxy"), data.get("proxy_type"),
                       "| corner", data.get("readback_corner_type"),
                       "| err", data.get("proxy_error"),
-                      "| z", before_z, "->", self._body_zmax_mm(target),
+                      "| z", before_z, "->", after_z,
                       "target", target_z)
         self.assertTrue(True)
 

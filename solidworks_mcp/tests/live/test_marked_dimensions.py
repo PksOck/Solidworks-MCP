@@ -21,6 +21,8 @@ from solidworks_mcp.tools.drawing_annotations import insert_marked_dimensions
 from solidworks_mcp.tools.drawings import add_standard_3_view
 from solidworks_mcp.tools.saving import save_document
 from solidworks_mcp.tools.sketch_edit import add_sketch_dimension
+from solidworks_mcp.tests.live._scratch import (close_new_documents,
+                                                open_document_titles)
 
 # swInsertAnnotation_e (swconst.tlb): the counterpart option that proves the
 # two sets are disjoint.
@@ -44,6 +46,7 @@ class LiveMarkedDimensionTests(unittest.TestCase):
         self.token = uuid4().hex
         self.extra_titles = []
         self.output_root = Path(self.automation._path_policy.output_roots[0])
+        self.baseline_titles = open_document_titles(self.automation)
 
     def tearDown(self):
         for title in list(self.extra_titles):
@@ -59,6 +62,7 @@ class LiveMarkedDimensionTests(unittest.TestCase):
                         self.automation.app.CloseDoc(item["title"])
                     except Exception:
                         pass
+        close_new_documents(self.automation, self.baseline_titles)
         self.automation.disconnect()
 
     # -- helpers -----------------------------------------------------------

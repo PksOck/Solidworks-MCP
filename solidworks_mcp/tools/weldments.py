@@ -1205,7 +1205,7 @@ def trim_weldment_member_to_face(sw, body_to_trim, trimming_body,
     return sw._result(
         persisted,
         f"Face trim proxy {proxy_name!r}; WeldCornerFeat in tree: {corners}.",
-        None if persisted else SwErrors.swFeatureError,
+        SwErrors.swSuccess if persisted else SwErrors.swFeatureError,
         {"proxy": proxy_name,
          "proxy_type": proxy_type,
          "readback_corner_type": readback_corner,

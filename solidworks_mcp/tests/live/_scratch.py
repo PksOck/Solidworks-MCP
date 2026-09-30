@@ -51,6 +51,41 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.casefold()).strip("-")
 
 
+def open_document_titles(automation) -> set:
+    """Titles open right now; the baseline for close_new_documents."""
+    documents = automation.list_open_documents()
+    if not documents["success"]:
+        return set()
+    return {item["title"] for item in documents["data"]["documents"]}
+
+
+def close_new_documents(automation, baseline: set) -> None:
+    """Close, unsaved, every document a test opened since ``baseline``.
+
+    Titles change during a test (``Draw3`` becomes ``<part> - Sheet1`` once a
+    view is placed, ``Part12`` takes the file name on save), so closing by the
+    title recorded at creation silently misses them and the leaked windows
+    break later tests.  Only unsaved documents and files under the approved
+    output roots are touched; drawings close before the parts they reference.
+    """
+    documents = automation.list_open_documents()
+    if not documents["success"]:
+        return
+    roots = [str(Path(root).resolve()).casefold()
+             for root in automation._path_policy.output_roots]
+    order = {"Drawing": 0, "Assembly": 1}
+    leaked = [item for item in documents["data"]["documents"]
+              if item["title"] not in baseline
+              and (not item["path"] or any(
+                  str(Path(item["path"]).resolve()).casefold().startswith(root)
+                  for root in roots))]
+    for item in sorted(leaked, key=lambda item: order.get(item["type"], 2)):
+        try:
+            automation.app.CloseDoc(item["title"])
+        except Exception:
+            pass
+
+
 class ScratchPartTestCase(unittest.TestCase):
     """One scratch part per test method; every part is closed unsaved."""
 
@@ -62,6 +97,7 @@ class ScratchPartTestCase(unittest.TestCase):
         self.created_titles = []
         self.review_artifacts = []
         self.retained = []
+        self.baseline_titles = open_document_titles(self.automation)
 
     def tearDown(self):
         if os.environ.get("SW_MCP_KEEP_REVIEW") != "1":
@@ -72,6 +108,7 @@ class ScratchPartTestCase(unittest.TestCase):
                 self.automation.app.CloseDoc(title)
             except Exception:
                 pass
+        close_new_documents(self.automation, self.baseline_titles)
         self.automation.disconnect()
         self.retained = []
 
