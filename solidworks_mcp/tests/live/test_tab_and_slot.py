@@ -206,11 +206,11 @@ class LiveTabAndSlotTests(ScratchPartTestCase):
                    if edge["is_line"] and edge["length_mm"]
                    and edge["start_mm"][1] > 99.0 and edge["end_mm"][1] > 99.0]
         self.assertTrue(outside, "expected the far edge of body A")
-        before = self._volumes()
+        before = self._sorted_volumes()
 
         result = create_tab_and_slot(self.automation, outside[0]["index"], slot_index)
         self.assertFalse(result["success"])
-        self.assertEqual(before, self._volumes())
+        self.assertEqual(before, self._sorted_volumes())
 
     def test_tool_rejects_a_single_body_part(self):
         self.open_scratch_part()
