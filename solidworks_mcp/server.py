@@ -45,6 +45,7 @@ from .core.session import TargetMismatchError
 from .registry import registered_tools, dispatch, operation_class_for
 from .knowledge import library as modeling_guidance
 from .utils import get_solidworks_info, set_default_unit
+from .tools.session import session_health
 
 # Configure logging
 config = get_config()
@@ -151,7 +152,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_solidworks_info",
-            description="Get SolidWorks installation information.",
+            description=(
+                "Get SolidWorks installation information and, when connected, session health: "
+                "process id, dedicated GPU memory, open document count and a restart hint."
+            ),
             inputSchema={"type": "object", "properties": {}, "required": []}
         ),
         Tool(
@@ -617,6 +621,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
         
         elif name == "get_solidworks_info":
             info = get_solidworks_info()
+            info["session"] = session_health(sw_automation)
             result = {
                 "success": info["found"],
                 "message": f"SolidWorks {'found' if info['found'] else 'not found'}",

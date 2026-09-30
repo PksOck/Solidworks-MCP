@@ -41,6 +41,7 @@ from . import project_lifecycle  # noqa: F401
 from . import cad_workflows  # noqa: F401
 from . import engineering_planners  # noqa: F401
 from . import manufacturing_package  # noqa: F401
+from . import session  # noqa: F401
 
 __all__ = ["export", "weldments", "sheetmetal", "assembly", "cutlist", "drawings", "inspection", "patterns", "measurements", "views", "history", "reference_geometry", "advanced_features", "surface_features", "properties", "configurations", "body_features", "appearance", "material", "equations", "sketch_edit", "sketch_entities", "drawing_annotations", "saving", "imports", "standard_parts", "simulation"]
 

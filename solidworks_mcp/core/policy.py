@@ -17,6 +17,7 @@ class OperationClass(str, Enum):
     MUTATE = "mutate"
     EXPORT = "export"
     RAW_EXECUTION = "raw_execution"
+    SESSION = "session"
 
 
 class WriteDeniedError(PermissionError):

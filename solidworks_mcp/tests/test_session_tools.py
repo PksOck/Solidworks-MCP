@@ -1,0 +1,141 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from solidworks_mcp.core.policy import OperationClass, PathPolicy
+from solidworks_mcp.registry import operation_class_for, registered_tools
+from solidworks_mcp.tools import session
+from solidworks_mcp.tools.session import restart_solidworks, session_health
+
+
+class App:
+    def __init__(self):
+        self.exit_calls = 0
+
+    def GetProcessID(self):
+        return 4242
+
+    def ExitApp(self):
+        self.exit_calls += 1
+
+
+class Automation:
+    def __init__(self, root, documents, connected=True):
+        self._path_policy = PathPolicy(output_roots=[Path(root)],
+                                       protected_roots=[Path(root) / "protected"])
+        self.app = App()
+        self.is_connected = connected
+        self.documents = documents
+        self.calls = []
+        self._document_session = "bound"
+
+    def list_open_documents(self):
+        return {"success": True, "message": "",
+                "data": {"documents": self.documents, "complete": True, "unresolved": []}}
+
+    def disconnect(self):
+        self.calls.append("disconnect")
+        self.is_connected = False
+
+    def connect(self):
+        self.calls.append("connect")
+        self.is_connected = True
+        return {"success": True, "message": "Connected"}
+
+    def _result(self, success, message, error_code=0, data=None):
+        return {"success": success, "message": message,
+                "error_code": int(error_code), "data": data or {}}
+
+
+class RegistrationTests(unittest.TestCase):
+    def test_restart_is_a_session_operation(self):
+        self.assertIn("restart_solidworks", {item.name for item in registered_tools()})
+        self.assertIs(OperationClass.SESSION, operation_class_for("restart_solidworks"))
+
+
+class SessionHealthTests(unittest.TestCase):
+    def test_disconnected_session_reports_only_that(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual({"connected": False}, session_health(Automation(root, [], False)))
+
+    def test_high_gpu_memory_recommends_restart(self):
+        with tempfile.TemporaryDirectory() as root:
+            sw = Automation(root, [{"title": "Part1", "path": ""}])
+            with mock.patch.object(session, "dedicated_gpu_mb", return_value=5000.0):
+                health = session_health(sw)
+        self.assertEqual(4242, health["process_id"])
+        self.assertEqual(1, health["open_documents"])
+        self.assertTrue(health["restart_recommended"])
+        self.assertIn("restart_solidworks", health["hint"])
+
+    def test_unknown_gpu_memory_does_not_recommend_restart(self):
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(session, "dedicated_gpu_mb", return_value=None):
+                health = session_health(Automation(root, []))
+        self.assertFalse(health["restart_recommended"])
+
+
+class RestartTests(unittest.TestCase):
+    def _saved(self, root, name="out.SLDPRT"):
+        return {"title": name, "path": str(Path(root) / name), "unsaved_changes": False}
+
+    def test_refuses_unsaved_modified_and_foreign_documents(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as other:
+            documents = [
+                {"title": "Part1", "path": "", "unsaved_changes": True},
+                {"title": "dirty", "path": str(Path(root) / "dirty.SLDPRT"), "unsaved_changes": True},
+                {"title": "user", "path": str(Path(other) / "user.SLDASM"), "unsaved_changes": False},
+                {"title": "ref", "path": str(Path(root) / "protected" / "r.SLDPRT"),
+                 "unsaved_changes": False},
+                self._saved(root),
+            ]
+            sw = Automation(root, documents)
+            result = restart_solidworks(sw, confirm=True)
+        self.assertFalse(result["success"])
+        reasons = {item["title"]: item["reason"] for item in result["data"]["blockers"]}
+        self.assertEqual({"Part1": "never saved", "dirty": "unsaved changes",
+                          "user": "outside the approved output roots",
+                          "ref": "outside the approved output roots"}, reasons)
+        self.assertEqual(0, sw.app.exit_calls)
+
+    def test_without_confirm_only_reports_what_would_close(self):
+        with tempfile.TemporaryDirectory() as root:
+            sw = Automation(root, [self._saved(root)])
+            with mock.patch.object(session, "dedicated_gpu_mb", return_value=100.0):
+                result = restart_solidworks(sw)
+        self.assertFalse(result["success"])
+        self.assertEqual(["out.SLDPRT"], result["data"]["would_close"])
+        self.assertEqual(0, sw.app.exit_calls)
+
+    def test_confirmed_restart_exits_waits_and_reconnects(self):
+        with tempfile.TemporaryDirectory() as root:
+            sw = Automation(root, [self._saved(root)])
+            with mock.patch.object(session, "dedicated_gpu_mb", return_value=100.0), \
+                    mock.patch.object(session, "_wait_for_exit", return_value=True) as wait:
+                result = restart_solidworks(sw, confirm=True)
+        self.assertTrue(result["success"], result["message"])
+        self.assertEqual(1, sw.app.exit_calls)
+        wait.assert_called_once_with(4242, 60)
+        self.assertEqual(["disconnect", "connect"], sw.calls)
+        self.assertNotEqual("bound", sw._document_session)
+        self.assertEqual(["out.SLDPRT"], result["data"]["closed"])
+
+    def test_process_that_does_not_exit_is_not_reconnected(self):
+        with tempfile.TemporaryDirectory() as root:
+            sw = Automation(root, [])
+            with mock.patch.object(session, "dedicated_gpu_mb", return_value=100.0), \
+                    mock.patch.object(session, "_wait_for_exit", return_value=False):
+                result = restart_solidworks(sw, confirm=True)
+        self.assertFalse(result["success"])
+        self.assertIn("did not exit", result["message"])
+        self.assertEqual(["disconnect"], sw.calls)
+
+    def test_not_connected_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            result = restart_solidworks(Automation(root, [], False), confirm=True)
+        self.assertFalse(result["success"])
+
+
+if __name__ == "__main__":
+    unittest.main()

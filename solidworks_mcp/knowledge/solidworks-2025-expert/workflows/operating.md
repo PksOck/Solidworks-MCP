@@ -69,6 +69,24 @@ Kjer orodje sprejme ime, uporabi ime; nikoli si ga ne izmišljuj. Ime ravnine
 | modalno okno (npr. izjema dodatka) | okno blokira avtomatizacijo | uporabnik ga zapre ročno; nato ponovno stanje |
 | `swFileLoadError`, malo virov okna | preveč odprtih dokumentov | zapri shranjene izhodne dokumente (ne izvirnikov, ne neshranjenih) |
 | `capture_view` odpove | okno ni vidno | uporabnik naj ne minimizira okna |
+| počasen sistem, `The interface is unknown` ali manjkajoče COM metode pozno v dolgi seji | zasičen GPU pomnilnik (glej spodaj) | `get_solidworks_info` → `session.gpu_dedicated_mb`; shrani, nato `restart_solidworks` |
+
+**GPU pomnilnik v dolgi seji.** SolidWorks ob zaprtju okna dokumenta ne vrne
+grafičnega pomnilnika do ponovnega zagona: izmerjeno ~36 MB na dokument, ko
+se zapre zadnje okno (celotna grafična površina se zgradi na novo), in
+~8 MB, dokler je odprto drugo okno. Geometrija na to ne vpliva; skrit
+dokument ne pušča, a ne more biti `ActiveDoc`, zato ni uporaben za orodja.
+Pri zaporedju, ki odpre in zapre veliko dokumentov (gradnja kosov iz skripte,
+testi), naj bo ves čas odprt en dokument (sidro), npr. sestav ali prazen
+neshranjen del, ki se zapre na koncu. Po več sto odprtih dokumentih ali ob
+upočasnitvi shrani delo in ponovno zaženi SolidWorks.
+
+`get_solidworks_info` v `session` poroča `gpu_dedicated_mb` in
+`restart_recommended` (prag 4096 MB). `restart_solidworks` se zavrne, dokler je
+odprt neshranjen, spremenjen ali dokument izven odobrenih izhodnih map; brez
+`confirm=true` samo vrne, kaj bi zaprl. `confirm=true` pošlji šele, ko je
+uporabnik ponovni zagon odobril. Po zagonu je seja prazna: dokumente odpri
+znova in ponovno veži cilj.
 
 - **`operation_id`** je idempotenten ključ: ponovitev z istim ključem vrne
   zapisan izid brez ponovne izvedbe. Uporabi ga, ko prejšnji odgovor ni
