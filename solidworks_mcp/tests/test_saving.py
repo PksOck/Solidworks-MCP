@@ -102,6 +102,44 @@ class SaveDocumentTests(unittest.TestCase):
             self.assertTrue(result["success"], result["message"])
             self.assertTrue(result["data"]["path"].endswith("review.SLDDRW"))
 
+    def test_explicit_sldlfp_path_is_kept_for_a_part(self):
+        for suffix in (".SLDLFP", ".sldlfp"):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as root:
+                automation = Automation(root, Document(1, "Kvadratna 12x12"))
+
+                result = save_document(
+                    automation, path=str(Path(root) / f"Kvadratna 12x12{suffix}")
+                )
+
+                self.assertTrue(result["success"], result["message"])
+                self.assertEqual(
+                    Path(root) / f"Kvadratna 12x12{suffix}", Path(result["data"]["path"])
+                )
+                self.assertEqual([result["data"]["path"]], automation.save_calls)
+
+    def test_sldlfp_suffix_is_still_corrected_for_other_document_types(self):
+        for doc_type, extension in ((2, ".SLDASM"), (3, ".SLDDRW")):
+            with self.subTest(doc_type=doc_type), tempfile.TemporaryDirectory() as root:
+                automation = Automation(root, Document(doc_type, "Model"))
+
+                result = save_document(
+                    automation, path=str(Path(root) / "profile.SLDLFP")
+                )
+
+                self.assertTrue(result["success"], result["message"])
+                self.assertTrue(result["data"]["path"].endswith(extension))
+
+    def test_other_extension_on_a_part_is_still_corrected(self):
+        with tempfile.TemporaryDirectory() as root:
+            automation = Automation(root, Document(1, "Model"))
+
+            result = save_document(
+                automation, path=str(Path(root) / "model.STP")
+            )
+
+            self.assertTrue(result["success"], result["message"])
+            self.assertEqual(Path(root) / "model.SLDPRT", Path(result["data"]["path"]))
+
     def test_write_outside_output_root_is_denied_before_saving(self):
         with tempfile.TemporaryDirectory() as root:
             automation = Automation(root)

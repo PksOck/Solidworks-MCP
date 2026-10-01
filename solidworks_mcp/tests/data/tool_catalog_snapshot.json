@@ -5262,7 +5262,7 @@
   }
  },
  "save_document": {
-  "description": "Save the active part, assembly or drawing as a native SolidWorks file. Without a path it saves into the first approved output root under 'subfolder', using the document title as the file name. Paths outside the approved output roots are denied.",
+  "description": "Save the active part, assembly or drawing as a native SolidWorks file. Without a path it saves into the first approved output root under 'subfolder', using the document title as the file name. Naming a .sldlfp path saves a part as a weldment profile; any other extension is corrected to the native one. Paths outside the approved output roots are denied.",
   "inputSchema": {
    "properties": {
     "overwrite": {
@@ -5271,7 +5271,7 @@
      "type": "boolean"
     },
     "path": {
-     "description": "Optional full destination path. Without it the file goes to <output_root>/<subfolder>/<title>.<ext>.",
+     "description": "Optional full destination path. Without it the file goes to <output_root>/<subfolder>/<title>.<ext>. Use a .sldlfp path to save a part as a weldment profile.",
      "type": "string"
     },
     "subfolder": {

@@ -17,6 +17,12 @@ from .guard import require_output_write
 
 SW_DOC_EXTENSIONS = {1: ".SLDPRT", 2: ".SLDASM", 3: ".SLDDRW"}
 SW_DOC_LABELS = {1: "part", 2: "assembly", 3: "drawing"}
+# A weldment profile is a part saved as a library feature part. SolidWorks
+# accepts such a file as a structural-member profile only when the file itself
+# carries the .sldlfp extension, so an explicit .sldlfp target is honoured for
+# these document types instead of being corrected to the native extension.
+LIBRARY_FEATURE_EXTENSION = ".SLDLFP"
+SW_DOC_LIBRARY_EXTENSIONS = {1: LIBRARY_FEATURE_EXTENSION}
 DEFAULT_SUBFOLDER = "saved"
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -38,12 +44,15 @@ def _safe_filename(title: str, extension: str) -> str:
         "Save the active part, assembly or drawing as a native SolidWorks "
         "file. Without a path it saves into the first approved output root "
         "under 'subfolder', using the document title as the file name. "
+        "Naming a .sldlfp path saves a part as a weldment profile; any other "
+        "extension is corrected to the native one. "
         "Paths outside the approved output roots are denied."
     ),
     schema={"type": "object", "properties": {
         "path": {"type": "string",
                  "description": "Optional full destination path. Without it the "
-                                "file goes to <output_root>/<subfolder>/<title>.<ext>."},
+                                "file goes to <output_root>/<subfolder>/<title>.<ext>. "
+                                "Use a .sldlfp path to save a part as a weldment profile."},
         "subfolder": {"type": "string", "default": DEFAULT_SUBFOLDER,
                       "description": "Folder inside the first output root used when "
                                      "path is omitted."},
@@ -82,7 +91,12 @@ def save_document(sw, path: str = None, subfolder: str = DEFAULT_SUBFOLDER,
     else:
         target = Path(str(path)).expanduser()
         if target.suffix.casefold() != extension.casefold():
-            target = target.with_suffix(extension)
+            library_extension = SW_DOC_LIBRARY_EXTENSIONS.get(doc_type)
+            if (
+                library_extension is None
+                or target.suffix.casefold() != library_extension.casefold()
+            ):
+                target = target.with_suffix(extension)
 
     denied = require_output_write(sw, str(target))
     if denied:
