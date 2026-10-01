@@ -24,6 +24,12 @@ LIFECYCLE_TOOLS = frozenset({
 })
 
 
+def _read_pid(sw):
+    from .tools.session import solidworks_process_id
+
+    return solidworks_process_id(sw)
+
+
 def _read_gpu_mb(sw):
     from .tools.session import dedicated_gpu_mb, solidworks_process_id
 
@@ -31,12 +37,14 @@ def _read_gpu_mb(sw):
 
 
 class SessionMonitor:
-    def __init__(self, clock=time.monotonic, gpu_reader=_read_gpu_mb):
+    def __init__(self, clock=time.monotonic, gpu_reader=_read_gpu_mb, pid_reader=_read_pid):
         self._clock = clock
         self._gpu_reader = gpu_reader
+        self._pid_reader = pid_reader
         self.reset()
 
     def reset(self) -> None:
+        self._pid = None
         self._opened = 0
         self._closed = 0
         self._last_count = None
@@ -51,6 +59,11 @@ class SessionMonitor:
             return ()
         if not getattr(sw, "is_connected", False):
             return ()
+        pid = self._pid_reader(sw)
+        if pid is not None:
+            if self._pid is not None and pid != self._pid:
+                self.reset()  # SolidWorks was restarted outside restart_solidworks
+            self._pid = pid
         count = int(com(sw.app, "GetDocumentCount"))
         if self._last_count is not None:
             delta = count - self._last_count

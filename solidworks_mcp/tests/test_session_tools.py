@@ -13,6 +13,7 @@ class App:
     def __init__(self):
         self.exit_calls = 0
         self.closed = []
+        self.on_close = None
 
     def GetProcessID(self):
         return 4242
@@ -22,6 +23,8 @@ class App:
 
     def CloseDoc(self, name):
         self.closed.append(name)
+        if self.on_close is not None:
+            self.on_close(name)
 
 
 class Automation:
@@ -31,8 +34,14 @@ class Automation:
         self.app = App()
         self.is_connected = connected
         self.documents = documents
+        self.kept_loaded = set()   # paths that stay loaded after CloseDoc (referenced elsewhere)
+        self.app.on_close = self._drop
         self.calls = []
         self._document_session = "bound"
+
+    def _drop(self, path):
+        if path not in self.kept_loaded:
+            self.documents = [d for d in self.documents if d.get("path") != path]
 
     def list_open_documents(self):
         return {"success": True, "message": "",
@@ -181,6 +190,55 @@ class CloseSavedOutputsTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual([expected], sw.app.closed)
         self.assertEqual(["out.SLDPRT"], result["data"]["closed"])
+
+    def test_assembly_is_kept_while_a_part_has_unsaved_changes(self):
+        with tempfile.TemporaryDirectory() as root:
+            documents = [
+                {"title": "dirty.SLDPRT", "path": str(Path(root) / "dirty.SLDPRT"),
+                 "unsaved_changes": True},
+                {"title": "asm.SLDASM", "path": str(Path(root) / "asm.SLDASM"),
+                 "unsaved_changes": False},
+                {"title": "part.SLDPRT", "path": str(Path(root) / "part.SLDPRT"),
+                 "unsaved_changes": False},
+            ]
+            sw = Automation(root, documents)
+            listing = close_saved_outputs(sw)
+            result = close_saved_outputs(sw, confirm=True)
+            part = str(Path(root) / "part.SLDPRT")
+        self.assertEqual(["part.SLDPRT"], [d["title"] for d in listing["data"]["would_close"]])
+        self.assertEqual([part], sw.app.closed)
+        self.assertEqual(["part.SLDPRT"], result["data"]["closed"])
+        reasons = {item["title"]: item["reason"] for item in result["data"]["kept"]}
+        self.assertEqual("unsaved changes", reasons["dirty.SLDPRT"])
+        self.assertEqual("depends on unsaved dirty.SLDPRT", reasons["asm.SLDASM"])
+
+    def test_document_changed_since_listing_is_not_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = str(Path(root) / "out.SLDPRT")
+            sw = Automation(root, [{"title": "out.SLDPRT", "path": path, "unsaved_changes": False}])
+            first = sw.list_open_documents
+
+            def listing_then_edit():
+                result = first()
+                sw.documents = [{"title": "out.SLDPRT", "path": path, "unsaved_changes": True}]
+                return result
+
+            sw.list_open_documents = listing_then_edit
+            result = close_saved_outputs(sw, confirm=True)
+        self.assertEqual([], sw.app.closed)
+        self.assertEqual([], result["data"]["closed"])
+        self.assertEqual("changed since listing",
+                         {i["title"]: i["reason"] for i in result["data"]["kept"]}["out.SLDPRT"])
+
+    def test_document_that_stays_loaded_is_reported_as_kept(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = str(Path(root) / "out.SLDPRT")
+            sw = Automation(root, [{"title": "out.SLDPRT", "path": path, "unsaved_changes": False}])
+            sw.kept_loaded.add(path)
+            result = close_saved_outputs(sw, confirm=True)
+        self.assertEqual([], result["data"]["closed"])
+        self.assertEqual("still loaded (referenced)",
+                         {i["title"]: i["reason"] for i in result["data"]["kept"]}["out.SLDPRT"])
 
     def test_incomplete_listing_is_refused(self):
         with tempfile.TemporaryDirectory() as root:

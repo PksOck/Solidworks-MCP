@@ -95,6 +95,20 @@ def _restart_blockers(sw, documents):
     return blockers
 
 
+_HOLDER_SUFFIXES = (".SLDASM", ".SLDDRW")
+
+
+def _current_document(sw, document):
+    """The document's entry in a fresh listing, or None when it cannot be confirmed."""
+    listed = sw.list_open_documents()
+    if not listed["success"] or not listed["data"].get("complete"):
+        return None
+    for current in listed["data"]["documents"]:
+        if current.get("path") == document["path"]:
+            return current
+    return None
+
+
 def _wait_for_exit(process_id, timeout_s):
     import win32api
     import win32event
@@ -195,14 +209,39 @@ def close_saved_outputs(sw, confirm=False):
     kept = _restart_blockers(sw, documents)
     kept_titles = {item["title"] for item in kept}
     closable = [document for document in documents if document.get("title") not in kept_titles]
+    unsaved = [item["title"] for item in kept if item["reason"] in ("never saved", "unsaved changes")]
+    if unsaved:
+        # Closing an assembly or drawing would also drop a part that is only loaded through it.
+        holders = [d for d in closable if Path(d.get("path") or "").suffix.upper() in _HOLDER_SUFFIXES]
+        kept += [{"title": d["title"], "path": d["path"],
+                  "reason": "depends on unsaved " + ", ".join(unsaved)} for d in holders]
+        closable = [d for d in closable if d not in holders]
+    closable.sort(key=lambda d: Path(d.get("path") or "").suffix.upper() not in _HOLDER_SUFFIXES)
     if not confirm:
         return sw._result(True, f"{len(closable)} saved output document(s) can be closed.",
                           SwErrors.swSuccess,
                           {"would_close": [{"title": d["title"], "path": d["path"]} for d in closable],
                            "kept": kept})
+    attempted = []
     for document in closable:
+        current = _current_document(sw, document)
+        if current is None or current.get("unsaved_changes") is not False:
+            kept.append({"title": document["title"], "path": document["path"],
+                         "reason": "changed since listing"})
+            continue
         com(sw.app, "CloseDoc", document["path"])
-    return sw._result(True, f"Closed {len(closable)} saved output document(s). "
+        attempted.append(document)
+    remaining = sw.list_open_documents()
+    if not remaining["success"] or not remaining["data"].get("complete"):
+        return sw._result(False, "Open documents could not be listed after closing; "
+                          "check list_open_documents before continuing.",
+                          SwErrors.swUnknownError, {"attempted": [d["title"] for d in attempted],
+                                                    "kept": kept})
+    still_open = {d.get("path") for d in remaining["data"]["documents"]}
+    closed = [d for d in attempted if d["path"] not in still_open]
+    kept += [{"title": d["title"], "path": d["path"], "reason": "still loaded (referenced)"}
+             for d in attempted if d["path"] in still_open]
+    return sw._result(True, f"Closed {len(closed)} saved output document(s). "
                       "Rebind the target document before the next change.",
                       SwErrors.swSuccess,
-                      {"closed": [document["title"] for document in closable], "kept": kept})
+                      {"closed": [document["title"] for document in closed], "kept": kept})

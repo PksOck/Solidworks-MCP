@@ -261,7 +261,7 @@ def _run_tool(reporter, name: str, sw, arguments: Dict):
     with progress_scope(reporter):
         execution = execute(name, sw, arguments)
     warnings = ()
-    if needs_com_thread(name):
+    if needs_com_thread(name) and not _is_rejected(execution):
         try:
             warnings = tuple(session_monitor.observe(sw, name, bool(execution.result.get("success"))))
         except Exception as error:

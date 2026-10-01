@@ -19,6 +19,15 @@ class App:
         return self.count
 
 
+class PidApp(App):
+    def __init__(self, pid):
+        super().__init__()
+        self.pid = pid
+
+    def GetProcessID(self):
+        return self.pid
+
+
 class Automation:
     def __init__(self):
         self.app = App()
@@ -68,6 +77,22 @@ class CountingTests(unittest.TestCase):
         watcher.observe(sw, "close_document", True)
         watcher.observe(sw, "restart_solidworks", True)
         self.assertEqual(0, watcher.snapshot()["documents_closed"])
+
+    def test_changed_process_id_resets_counters(self):
+        watcher, _ = monitor()
+        sw = Automation()
+        sw.app = PidApp(100)
+        sw.app.count = 5
+        watcher.observe(sw, "connect_solidworks", True)
+        sw.app.count = 0
+        watcher.observe(sw, "close_document", True)
+        self.assertEqual(5, watcher.snapshot()["documents_closed"])
+        sw.app = PidApp(200)                  # SolidWorks crashed or was restarted by hand
+        sw.app.count = 1
+        watcher.observe(sw, "open_document", True)
+        snapshot = watcher.snapshot()
+        self.assertEqual(0, snapshot["documents_closed"])
+        self.assertEqual(0, snapshot["documents_opened"])
 
     def test_failed_restart_keeps_counters(self):
         watcher, _ = monitor()
@@ -177,6 +202,31 @@ class ServerWiringTests(unittest.TestCase):
             response = asyncio.run(server.call_tool(self.NAME, {}))
         self.assertTrue(response[0].text.startswith("[SUCCESS] read"))
         self.assertNotIn("COM gone", response[0].text)
+
+    def test_replay_returns_the_same_text_including_the_warning(self):
+        with mock.patch.object(server.session_monitor, "observe",
+                               return_value=("Long SolidWorks session: test.",)) as observe:
+            first = asyncio.run(server.call_tool(self.NAME, {"operation_id": "replay-1"}))
+            second = asyncio.run(server.call_tool(self.NAME, {"operation_id": "replay-1"}))
+        observe.assert_called_once()
+        self.assertIn("Long SolidWorks session: test.", first[0].text)
+        self.assertEqual(first[0].text, second[0].text)
+
+    def test_rejected_call_does_not_consume_the_warning(self):
+        @tool(name=self.NAME + "_strict", description="test",
+              schema={"type": "object", "properties": {"x": {"type": "number"}},
+                      "required": ["x"], "additionalProperties": False},
+              operation_class=OperationClass.READ)
+        def strict(sw, x):
+            return sw._result(True, "read")
+
+        try:
+            with mock.patch.object(server.session_monitor, "observe") as observe:
+                response = asyncio.run(server.call_tool(self.NAME + "_strict", {}))
+            self.assertIn("VALIDATION_FAILED", response[0].text)
+            observe.assert_not_called()
+        finally:
+            _TOOLS.pop(self.NAME + "_strict", None)
 
     def test_tool_that_never_touches_com_skips_the_monitor(self):
         with mock.patch.object(server.session_monitor, "observe") as observe:
